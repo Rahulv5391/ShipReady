@@ -2,3 +2,17 @@ AI automation opportunities.xlsx
 AI automation.pdf
 # PLAN.md
 CLAUDE.md
+docs
+# Python / tooling
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+
+# Local config and generated data
+.env
+/data/
+Decision.md
+Flow.md
