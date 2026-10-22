@@ -1031,7 +1031,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - *Exit:* one command creates the schema and loads rules and reference data idempotently.
 
 **Phase 3: Official reference data loaders**
-- Loaders for the DGFT ITC-HS export policy schedule, CBIC export exchange rates and UN/LOCODE ports, from files downloaded into `data/reference/`.
+- UN/LOCODE loader from the UNECE release downloaded into `data/reference/`; curated ITC-HS export policy and CBIC export exchange-rate files (neither is published as data; Decision.md D-12, D-13).
 - *Exit:* real files load cleanly; malformed rows fail with the file and line number.
 
 **Phase 4: ShipGen, golden shipments**
