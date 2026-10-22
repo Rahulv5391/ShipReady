@@ -11,6 +11,21 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: shipready
+          POSTGRES_PASSWORD: shipready
+          POSTGRES_DB: shipready_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U shipready"
+          --health-interval 2s
+          --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://shipready:shipready@localhost:5432/shipready_test
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

@@ -1,0 +1,20 @@
+# Local development services. The credentials are for a throwaway local database only.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: shipready
+      POSTGRES_PASSWORD: shipready
+      POSTGRES_DB: shipready
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/postgres-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shipready -d shipready"]
+      interval: 2s
+      retries: 15
+
+volumes:
+  pgdata:

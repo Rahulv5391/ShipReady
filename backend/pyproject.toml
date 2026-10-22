@@ -6,7 +6,12 @@ authors = [
     { name = "Rahul Verma", email = "rahul@nebula9.ai" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "alembic>=1.20.1",
+    "psycopg[binary]>=3.3.6",
+    "pyyaml>=6.0.3",
+    "sqlalchemy>=2.1.6",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.16,<0.12.0"]
@@ -18,6 +23,7 @@ dev = [
     "mypy>=2.4.0",
     "pytest>=9.1.1",
     "ruff>=0.17.1",
+    "types-pyyaml>=6.0.12.20260906",
 ]
 
 [tool.ruff]
@@ -29,8 +35,12 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "migrations"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+
+
+[tool.alembic]
+script_location = "%(here)s/migrations"

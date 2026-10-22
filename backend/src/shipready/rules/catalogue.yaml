@@ -1,0 +1,337 @@
+# The check catalogue (PLAN.md Section 6). Loaded into the `rules` table by `shipready.db.seed`.
+#
+# check_type: DET deterministic code, DEC Decisions API judgement, LLM reasoning model; a "+"
+#   combines them. severity: blocker, major, minor, info.
+# source: the public basis for the check (there is no domain advisor; see Decision.md D-1).
+# enabled: false for checks deferred to the stretch phase (PLAN.md Section 4).
+
+# --- Quantities and values ---
+
+- id: QTY-01
+  title: Invoice and packing list quantities match
+  description: Line quantities match between the commercial invoice and the packing list, after unit normalisation.
+  check_type: DET
+  severity: blocker
+  prevents: Shipping bill query
+  source: Customs Act 1962, Section 50 (the exporter declares the goods truly on the shipping bill; the invoice and packing list support it)
+
+- id: QTY-02
+  title: Invoice and shipping bill quantities match
+  description: Line quantities match between the commercial invoice and the shipping bill.
+  check_type: DET
+  severity: blocker
+  prevents: Shipping bill query
+  source: Customs Act 1962, Section 50; CGST Rules 2017, Rule 96 (IGST refund matches the shipping bill against the GST invoice)
+
+- id: QTY-03
+  title: Invoice quantities within the purchase order
+  description: Invoice quantities do not exceed the purchase order quantities; partial or over-shipment is flagged.
+  check_type: DET
+  severity: major
+  prevents: Buyer dispute
+  source: Buyer purchase order (contract terms); UCP 600 Article 30 (quantity tolerance) when paid by letter of credit
+
+- id: VAL-01
+  title: Invoice arithmetic is correct
+  description: Each invoice line amount equals quantity times unit price, and the lines sum to the invoice total.
+  check_type: DET
+  severity: major
+  prevents: Valuation query
+  source: CGST Rules 2017, Rule 46 (a tax invoice states quantity, value and total value)
+
+- id: VAL-02
+  title: Invoice value matches the shipping bill
+  description: The invoice currency and total match the invoice value declared on the shipping bill.
+  check_type: DET
+  severity: blocker
+  prevents: Valuation mismatch
+  source: Customs Act 1962, Section 14 (transaction value); CGST Rules 2017, Rule 96 (IGST refund validation against the shipping bill)
+
+- id: VAL-03
+  title: Unit prices match the purchase order
+  description: Invoice unit prices match the purchase order within tolerance.
+  check_type: DET
+  severity: minor
+  prevents: Buyer dispute or letter of credit discrepancy
+  source: Buyer purchase order (contract terms); UCP 600 Article 30 (unit price tolerance) when paid by letter of credit
+
+- id: FX-01
+  title: Exchange rate matches the CBIC export rate
+  description: The exchange rate used for the INR equivalent matches the CBIC export rate for the relevant date.
+  check_type: DET
+  severity: major
+  prevents: Valuation or refund issues
+  source: Customs Act 1962, Section 14 (rate notified by CBIC applies); CBIC exchange-rate notifications
+
+- id: INC-01
+  title: Incoterm consistent and matches freight terms
+  description: The Incoterm is the same on the invoice, purchase order and shipping bill, and the bill of lading freight term fits it (e.g. CIF means freight prepaid).
+  check_type: DET
+  severity: major
+  prevents: Valuation query or bill of lading error
+  source: ICC Incoterms 2020 (under C-terms the seller pays the main carriage)
+
+# --- Packages, weights, containers ---
+
+- id: PKG-01
+  title: Package count consistent
+  description: The total package count is the same on the packing list, bill of lading and shipping bill.
+  check_type: DET
+  severity: blocker
+  prevents: EGM error "P"
+  source: ICEGATE EGM error code P (package count mismatch), summarised at https://ebrc.in/resources/shipping-bill-and-icegate-error-codes
+
+- id: WT-01
+  title: Gross weight consistent
+  description: Gross weight on the packing list and bill of lading agree within tolerance.
+  check_type: DET
+  severity: major
+  prevents: Bill of lading amendment
+  source: Customs Act 1962, Section 50 (accurate declaration); carriers charge for bill of lading amendments
+  params:
+    gross_weight_tolerance_pct: 0.5
+
+- id: WT-02
+  title: Weights add up
+  description: Net weight does not exceed gross weight, and package weights sum to the totals.
+  check_type: DET
+  severity: major
+  prevents: Data error
+  source: Arithmetic consistency of the packing list (net weight cannot exceed gross weight)
+
+- id: CNT-01
+  title: Container numbers valid and consistent
+  description: Container numbers are the same on the packing list, bill of lading and shipping bill, and each has a valid ISO 6346 check digit.
+  check_type: DET
+  severity: blocker
+  prevents: EGM error "C"
+  source: ISO 6346 (container check digit); ICEGATE EGM error code C, summarised at https://ebrc.in/resources/shipping-bill-and-icegate-error-codes
+
+- id: CNT-02
+  title: Container count consistent
+  description: The number of containers is the same across documents.
+  check_type: DET
+  severity: blocker
+  prevents: EGM error "N"
+  source: ICEGATE EGM error code N, summarised at https://ebrc.in/resources/shipping-bill-and-icegate-error-codes
+
+- id: CNT-03
+  title: Seal numbers consistent
+  description: Seal numbers are the same on the packing list and bill of lading.
+  check_type: DET
+  severity: major
+  prevents: Port hold
+  source: CBIC Circular 26/2017-Customs (self-sealing of export containers; seal numbers are declared and checked at the port)
+
+- id: MRK-01
+  title: Marks and numbers consistent
+  description: Marks and numbers are the same on the packing list and bill of lading.
+  check_type: DET
+  severity: minor
+  prevents: Cargo identification problems
+  source: Customs Act 1962, Section 50 (marks and numbers identify the declared packages)
+
+# --- Classification and policy ---
+
+- id: HS-01
+  title: Valid 8-digit ITC-HS code on every line
+  description: Every invoice line has an 8-digit ITC-HS code that exists in the current schedule.
+  check_type: DET
+  severity: blocker
+  prevents: Rejection
+  source: ITC(HS) 2022 Schedule II (Export Policy), DGFT; Customs Tariff Act 1975 (8-digit tariff items)
+
+- id: HS-02
+  title: HS code identical across documents
+  description: The HS code for each item is the same on the invoice, packing list, shipping bill and certificate of origin.
+  check_type: DET
+  severity: blocker
+  prevents: Shipping bill query
+  source: Customs Act 1962, Section 50 (declared classification); ITC(HS) 2022
+
+- id: HS-03
+  title: Description plausible for the HS heading
+  description: The product description is plausible for the declared HS heading. Flags only; never re-classifies.
+  check_type: DEC
+  severity: major
+  prevents: Misclassification query
+  source: WCO General Rules for the Interpretation of the Harmonized System
+
+- id: POL-01
+  title: Export policy allows the goods
+  description: The export policy for the HS code is Free; if Restricted, Prohibited or STE, the required licence or authorisation is flagged.
+  check_type: DET
+  severity: blocker
+  prevents: Illegal export
+  source: Foreign Trade (Development and Regulation) Act 1992, Section 11; ITC(HS) 2022 Schedule II export policy
+
+- id: POL-02
+  title: Export policy conditions met
+  description: Policy conditions on the HS code (e.g. registration, quality certificate) are met by the documents present.
+  check_type: LLM
+  severity: major
+  prevents: Hold
+  source: ITC(HS) 2022 Schedule II policy conditions
+  enabled: false
+
+- id: DESC-01
+  title: Goods description consistent
+  description: The goods description is semantically consistent across the invoice, packing list, shipping bill, bill of lading and certificate of origin.
+  check_type: DEC
+  severity: major
+  prevents: Mismatch query
+  source: Customs Act 1962, Section 50; UCP 600 Article 14(d) (data need not be identical but must not conflict)
+
+- id: UQC-01
+  title: Unit of quantity valid and consistent
+  description: The unit of quantity is a valid UQC and the same across documents.
+  check_type: DET
+  severity: minor
+  prevents: Data error
+  source: GST UQC list (CBIC); CGST Rules 2017, Rule 46
+
+# --- Parties and identifiers ---
+
+- id: ID-01
+  title: Exporter identifiers valid
+  description: IEC format is valid, GSTIN format and checksum are valid, and the PAN inside the GSTIN matches the exporter's PAN.
+  check_type: DET
+  severity: blocker
+  prevents: Rejection
+  source: Foreign Trade Policy 2023 (IEC required to export; the IEC is the PAN); GSTN GSTIN structure and checksum
+
+- id: ID-02
+  title: Exporter GSTIN identical on invoice and shipping bill
+  description: The exporter GSTIN on the invoice is the same as on the shipping bill.
+  check_type: DET
+  severity: blocker
+  prevents: IGST refund error SB003
+  source: ICEGATE IGST refund error SB003 (GSTIN mismatch); CGST Rules 2017, Rule 96
+
+- id: ID-03
+  title: AD code present and consistent
+  description: The AD code is present (14 digits) and consistent with the bank details.
+  check_type: DET
+  severity: major
+  prevents: Remittance or shipping bill issue
+  source: RBI Master Direction - Export of Goods and Services (exports through an authorised dealer bank); AD code registration on ICEGATE
+
+- id: PTY-01
+  title: Exporter name and address consistent
+  description: The exporter name and address are consistent across documents.
+  check_type: DEC
+  severity: major
+  prevents: Query
+  source: CGST Rules 2017, Rule 46 (supplier name and address on the invoice); Customs Act 1962, Section 50
+
+- id: PTY-02
+  title: Consignee consistent
+  description: The consignee name, address and country are consistent across the invoice, bill of lading, certificate of origin and purchase order.
+  check_type: DEC
+  severity: major
+  prevents: Bill of lading amendment or certificate of origin rejection
+  source: CGST Rules 2017, Rule 46 (recipient name and delivery address on the invoice)
+
+- id: PTY-03
+  title: Notify party on a to-order bill of lading
+  description: A notify party is present when the bill of lading is consigned "to order".
+  check_type: DET
+  severity: minor
+  prevents: Delivery delay
+  source: Bill of lading practice (with no named consignee the carrier advises arrival to the notify party)
+
+# --- Invoice and GST ---
+
+- id: INV-01
+  title: Invoice number and date match the shipping bill
+  description: The invoice number and date on the shipping bill are identical to the commercial invoice (GST invoice series).
+  check_type: DET
+  severity: blocker
+  prevents: IGST refund error SB005
+  source: ICEGATE IGST refund error SB005 (invoice number mismatch); CGST Rules 2017, Rule 96
+
+- id: GST-01
+  title: LUT or IGST statement on the invoice
+  description: The invoice carries either the LUT declaration or the IGST payment statement.
+  check_type: DET+DEC
+  severity: blocker
+  prevents: GST non-compliance
+  source: CGST Rules 2017, Rule 46 (export invoice endorsement "supply meant for export on payment of IGST" or "under bond or letter of undertaking without payment of IGST")
+
+- id: GST-02
+  title: LUT valid for the invoice
+  description: If exporting under LUT, the ARN is present, matches the LUT document, and the LUT covers the invoice date.
+  check_type: DET
+  severity: major
+  prevents: Refund issue
+  source: CGST Rules 2017, Rule 96A (LUT furnished for a financial year)
+
+# --- Routing and dates ---
+
+- id: PORT-01
+  title: Port of loading valid and consistent
+  description: The port of loading is consistent, is a valid Indian port code, and the AD code is registered for that port (if known).
+  check_type: DET
+  severity: major
+  prevents: Shipping bill rejection
+  source: ICEGATE port codes; AD code registration on ICEGATE is per port of export
+
+- id: DST-01
+  title: Destination country consistent
+  description: The destination country is the same on the invoice, bill of lading, certificate of origin and purchase order.
+  check_type: DET
+  severity: major
+  prevents: Certificate of origin or bill of lading error
+  source: Customs Act 1962, Section 50; ISO 3166 country codes
+
+- id: DATE-01
+  title: Document dates in order
+  description: Purchase order date <= invoice date <= bill of lading date; certificate of origin date <= bill of lading date (or as the agreement allows); documents within letter of credit dates.
+  check_type: DET
+  severity: major
+  prevents: Letter of credit discrepancy
+  source: UCP 600 Article 14(i) (document dates) and Article 6(d) (expiry date)
+
+# --- Completeness ---
+
+- id: DOC-01
+  title: Required documents present
+  description: The documents required for this shipment are present (base set plus destination, product and payment terms; e.g. certificate of origin for FTA benefit, phytosanitary certificate for plants, documents listed in the letter of credit). Severity depends on the missing document; the default is blocker.
+  check_type: LLM+DET
+  severity: blocker
+  prevents: Missing document
+  source: Foreign Trade Policy 2023 (mandatory export documents - bill of lading or airway bill, commercial invoice cum packing list, shipping bill); destination and product requirements for certificates
+
+- id: DOC-02
+  title: Mandatory fields present
+  description: Mandatory fields are present on each document (field lists in PLAN.md Section 5.1).
+  check_type: DET
+  severity: major
+  prevents: Rejection
+  source: CGST Rules 2017, Rule 46 (tax invoice contents); shipping bill fields required by ICEGATE
+
+- id: COO-01
+  title: Preferential certificate of origin valid
+  description: For a preferential certificate of origin, the agreement matches the destination, the origin criterion is stated, and the HS code matches the invoice.
+  check_type: DET+LLM
+  severity: major
+  prevents: Loss of FTA benefit
+  source: DGFT Certificate of Origin platform (coo.dgft.gov.in); rules of origin of the relevant trade agreement
+
+- id: LC-01
+  title: Documents comply with the letter of credit
+  description: Documents comply with the letter of credit terms (description, amounts, dates, document list).
+  check_type: LLM
+  severity: major
+  prevents: Letter of credit discrepancy
+  source: UCP 600 Article 14 (standard for examination of documents)
+  enabled: false
+
+- id: EML-01
+  title: Email instructions reflected in documents
+  description: Instructions in emails (e.g. "change consignee") are reflected in the latest documents.
+  check_type: LLM
+  severity: major
+  prevents: Wrong documents
+  source: Operational practice; no regulatory basis (instructions agreed with the buyer or forwarder by email)
+  enabled: false

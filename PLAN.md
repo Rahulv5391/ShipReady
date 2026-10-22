@@ -1025,9 +1025,9 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - *Exit:* the normaliser validates good and bad identifiers correctly; CI green.
 
 **Phase 2: Database, check catalogue and built-in reference data**
-- Docker Compose (Postgres + pgvector), SQLAlchemy models, Alembic migration.
+- Docker Compose (Postgres), SQLAlchemy models, Alembic migration. pgvector is added when product matching needs it (Decision.md D-9).
 - Check catalogue as data (`catalogue.yaml` → `rules` table), each rule with its public `source`.
-- Built-in reference lists: UQC, ISO countries, seed ports; a CLI command to load them.
+- Built-in reference lists: UQC, ISO countries, seed ports; a seed module to load them (D-11).
 - *Exit:* one command creates the schema and loads rules and reference data idempotently.
 
 **Phase 3: Official reference data loaders**
@@ -1142,7 +1142,7 @@ One developer covers architecture, backend, agents, frontend, data generation an
 ├── web/                         # Next.js frontend (Vercel)
 ├── data/                        # downloaded reference files and generated datasets (git-ignored)
 ├── docs/                        # finalisation PDF, ADRs, runbooks
-├── docker-compose.yml           # local Postgres + pgvector, Redis (from Phase 2)
+├── docker-compose.yml           # local Postgres (Phase 2); Redis from Phase 8
 ├── render.yaml                  # Render Blueprint
 ├── .github/workflows/ci.yml
 └── PLAN.md

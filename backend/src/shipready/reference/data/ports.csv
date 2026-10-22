@@ -1,0 +1,29 @@
+code,name,country,unlocode,kind
+INNSA1,Nhava Sheva (JNPT),IN,INNSA,sea
+INMUN1,Mundra,IN,INMUN,sea
+INMAA1,Chennai,IN,INMAA,sea
+INCOK1,Cochin,IN,INCOK,sea
+INTUT1,Tuticorin,IN,INTUT,sea
+INVTZ1,Visakhapatnam,IN,INVTZ,sea
+INCCU1,Kolkata,IN,INCCU,sea
+INBOM4,Mumbai Air Cargo Complex (Sahar),IN,INBOM,air
+INDEL4,Delhi Air Cargo Complex,IN,INDEL,air
+INMAA4,Chennai Air Cargo Complex,IN,INMAA,air
+INBLR4,Bengaluru Airport,IN,INBLR,air
+INTKD6,ICD Tughlakabad,IN,INTKD,icd
+AEJEA,Jebel Ali,AE,AEJEA,sea
+AEDXB,Dubai International Airport,AE,AEDXB,air
+SAJED,Jeddah,SA,SAJED,sea
+LKCMB,Colombo,LK,LKCMB,sea
+SGSIN,Singapore,SG,SGSIN,sea
+HKHKG,Hong Kong,HK,HKHKG,sea
+CNSHA,Shanghai,CN,CNSHA,sea
+NLRTM,Rotterdam,NL,NLRTM,sea
+BEANR,Antwerp,BE,BEANR,sea
+DEHAM,Hamburg,DE,DEHAM,sea
+GBFXT,Felixstowe,GB,GBFXT,sea
+GBLHR,London Heathrow Airport,GB,GBLHR,air
+USNYC,New York,US,USNYC,sea
+USLAX,Los Angeles,US,USLAX,sea
+AUSYD,Sydney,AU,AUSYD,sea
+KEMBA,Mombasa,KE,KEMBA,sea
