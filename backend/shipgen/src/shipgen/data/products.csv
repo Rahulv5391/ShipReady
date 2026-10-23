@@ -1,0 +1,21 @@
+sku,category,hs_code,description,variants,uqc,price_usd_min,price_usd_max,net_kg_per_unit,units_per_package,package_type,package_tare_kg,package_cbm,packages_min,packages_max
+CSH-W,food,08013220,"Cashew kernels, whole",W240;W320;W450,KGS,7.20,9.80,1,25,CTN,1.2,0.040,40,400
+TEA-B,food,09024020,"Black tea, CTC, in bulk",Assam BOP;Assam BP;Nilgiri BOP,KGS,2.90,4.60,1,50,BAG,0.5,0.120,20,300
+TEA-T,food,09024040,"Black tea bags, 100 x 2 g",English Breakfast;Masala Chai;Earl Grey,KGS,6.00,9.00,1,10,CTN,1.5,0.060,30,400
+PEP-G,food,09041130,"Black pepper, garbled",500 GL;550 GL;570 GL,KGS,6.10,8.20,1,25,BAG,0.2,0.050,20,300
+TUR-P,food,09103030,Turmeric powder,Curcumin 3%;Curcumin 5%,KGS,2.00,3.10,1,25,BAG,0.2,0.040,40,600
+RIC-B,food,10063020,Basmati rice,1121 Steam;1121 Sella;Pusa 1509,KGS,1.05,1.60,1,25,BAG,0.15,0.040,100,900
+PHM-A,pharma,30049059,"Artemether and lumefantrine tablets, 20/120 mg",Pack of 24;Pack of 6,KGS,40.00,70.00,1,12,CTN,1.5,0.050,10,120
+PHM-P,pharma,30049064,"Phenylbutazone tablets, 200 mg",Pack of 100;Pack of 1000,KGS,30.00,50.00,1,12,CTN,1.5,0.050,10,120
+BAG-L,lifestyle,42022110,"Ladies handbags, genuine leather",Tote;Satchel;Clutch,NOS,18.00,35.00,0.8,20,CTN,2.0,0.120,5,80
+YRN-C,textiles,52051210,"Cotton yarn, grey, carded, single",Ne 16/1;Ne 20/1;Ne 24/1,KGS,2.80,3.60,1,50,BAG,0.3,0.150,20,300
+TSH-C,textiles,61091000,"Men's T-shirts, cotton, knitted, round neck",Size S;Size M;Size L;Size XL,NOS,2.50,5.00,0.18,50,CTN,1.2,0.080,10,200
+SHT-C,textiles,62052090,"Men's shirts, cotton, woven, long sleeve",Size M;Size L;Size XL,NOS,6.00,12.00,0.3,40,CTN,1.5,0.100,10,150
+BED-C,textiles,63023100,"Bed sheets, cotton, dyed",Single;Double;King,KGS,6.00,9.00,1,20,CTN,1.0,0.070,10,200
+TWL-C,textiles,63026090,"Bath towels, cotton terry",White;Grey;Navy,KGS,5.00,8.00,1,20,CTN,1.0,0.070,10,200
+GRN-S,stone,68029300,"Granite slabs, polished, 2 cm",Black Galaxy;Tan Brown;Kashmir White,KGS,0.25,0.45,1,2000,CRT,80,1.000,2,10
+TIL-V,stone,69072100,"Vitrified floor tiles, 600 x 600 mm",Glossy;Matt;Rustic,SQM,5.00,9.00,13,1.44,BOX,0.5,0.020,100,1000
+BLT-S,engineering,73181500,"Hex bolts, steel, zinc plated",M10;M12;M16,KGS,1.50,2.50,1,25,CTN,0.5,0.010,20,400
+PMP-W,engineering,84137010,"Centrifugal water pumps",0.5 HP;1 HP;2 HP,NOS,60.00,110.00,12,1,CTN,1.5,0.050,10,200
+AUT-P,engineering,87089900,"Suspension parts for motor vehicles, steel",Control arm;Tie rod end;Ball joint,KGS,3.00,6.00,1,20,CTN,1.0,0.030,20,300
+FRN-W,lifestyle,94036000,"Coffee tables, sheesham wood",Round;Square;Nesting set,NOS,45.00,90.00,18,1,CTN,3.0,0.250,10,120

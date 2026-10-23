@@ -3,6 +3,7 @@
 import csv
 import io
 from collections.abc import Iterator
+from decimal import Decimal, InvalidOperation
 from importlib.resources import files
 
 
@@ -14,9 +15,9 @@ class ReferenceDataError(ValueError):
         super().__init__(f"{location}: {message}")
 
 
-def read_text(name: str) -> str:
-    """Text of the packaged file reference/data/<name>."""
-    return files("shipready.reference").joinpath("data", name).read_text(encoding="utf-8")
+def read_text(name: str, package: str = "shipready.reference") -> str:
+    """Text of the packaged file <package>/data/<name>."""
+    return files(package).joinpath("data", name).read_text(encoding="utf-8")
 
 
 def read_csv(name: str) -> list[dict[str, str]]:
@@ -35,3 +36,14 @@ def numbered_rows(
         if None in row or None in row.values():
             raise ReferenceDataError(source, reader.line_num, f"expected {len(columns)} fields")
         yield reader.line_num, {key: value.strip() for key, value in row.items()}
+
+
+def positive_decimal(source: str, line: int, name: str, value: str) -> Decimal:
+    """Parse a positive, finite decimal field or raise ReferenceDataError."""
+    try:
+        number = Decimal(value)
+    except InvalidOperation:
+        raise ReferenceDataError(source, line, f"{name} is not a number: {value!r}") from None
+    if not number.is_finite() or number <= 0:
+        raise ReferenceDataError(source, line, f"{name} must be positive: {value!r}")
+    return number

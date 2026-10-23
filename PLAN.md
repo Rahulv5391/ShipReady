@@ -97,6 +97,15 @@ Today these checks are done by eye, document by document, often under deadline p
 9. Human review: accept, dismiss or override each finding, approve the report, approve the outgoing messages.
 10. Audit trail of everything (who, what, when, which model, which evidence).
 
+### Open world: any product, any destination
+
+ShipReady must handle a real exporter's shipment, whatever it contains and wherever it goes. Nothing in the checking path may assume a closed list of products, countries, ports or currencies.
+
+- **Cross-document checks work for anything.** Most checks compare documents with each other (quantities, values, identifiers, containers, dates, parties); they do not depend on what the goods are.
+- **Reference data aims at full official coverage:** every 8-digit ITC(HS) code and the Schedule 2 export policy exceptions, every ICEGATE port code, all UN/LOCODE locations, all ISO 3166 countries and ISO 4217 currencies, every currency CBIC notifies (Phase 5).
+- **Three outcomes, never a false alarm from a gap.** Each check returns pass, fail or not verified. A value our reference data does not contain (a new HS code, a currency CBIC does not notify, a port added after our last update) is reported as *not verified*, with the reason, never as an error. The report shows how much could not be verified.
+- **ShipGen's lists are test-data choices only.** Its product catalogue (20 products) and 13 destination countries decide what synthetic shipments contain; they do not limit what ShipReady can check, and can grow at any time.
+
 ### Simplified for a one-person build
 
 - **One organisation, simple login.** The schema keeps `org_id` so multi-tenancy can be added later, but there are no per-org roles or row-level security in the showcase.
@@ -145,6 +154,8 @@ Today these checks are done by eye, document by document, often under deadline p
 - **RCMC:** needed only when claiming export incentives.
 
 ### 5.3 Reference data we rely on
+
+The goal is complete official coverage of each list (Section 4, "Open world"). A value missing from a list makes the dependent check *not verified*, never a failure.
 
 | Data | Source | Refresh |
 |---|---|---|
@@ -500,7 +511,7 @@ result = await Runner.run(
 )
 ```
 
-> In practice the fixed stages (classify → extract → normalise → rules) can be driven by plain Python, with the Orchestrator agent handling the judgement-heavy back half (compliance, verification, drafting, retries). Decide after Phase 2 benchmarks; both fit this design.
+> In practice the fixed stages (classify → extract → normalise → rules) can be driven by plain Python, with the Orchestrator agent handling the judgement-heavy back half (compliance, verification, drafting, retries). Decide after the Phase 12 model benchmark; both fit this design.
 
 ---
 
@@ -1007,7 +1018,7 @@ Assumptions for a typical 7-document, ~20-page sea shipment. Prices from OpenAI'
 | Drafting | ~8k in / 2k out | gpt-6.1-sol | ~$0.04 |
 | **Total** | | | **≈ $0.45–0.55 per shipment** (≈ ₹40–50) |
 
-These are estimates; the real numbers come from `model_calls` in Phase 2. Levers to lower cost: `detail: low` for clean digital PDFs, prompt caching of instructions and schemas, Luna for simple documents, and skipping the Critic for minor findings.
+These are estimates; the real numbers come from `model_calls` in Phase 12. Levers to lower cost: `detail: low` for clean digital PDFs, prompt caching of instructions and schemas, Luna for simple documents, and skipping the Critic for minor findings.
 
 Infra for the showcase: Vercel Hobby (free) for the web app; on Render, the API web service, background worker, Postgres and Key Value on the smallest paid instances (free web services sleep and Render's background workers have no free tier); Cloudflare R2 free tier for files. Check current Render pricing before deploying; free tiers can be used during development.
 
@@ -1035,74 +1046,79 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - *Exit:* real files load cleanly; malformed rows fail with the file and line number.
 
 **Phase 4: ShipGen, golden shipments**
-- Product catalogue (HS codes checked against the loaded ITC-HS table), golden shipment generator, per-document field values (CI, PL, PO, SB, BL/AWB, COO, LUT).
+- Product catalogue (HS codes checked against the ITC-HS reference file), golden shipment generator, per-document field values (CI, PL, PO, SB, BL/AWB, COO, LUT) (Decision.md D-14, D-15, D-17).
 - *Exit:* generated shipments are deterministic, format-valid and internally consistent.
 
-**Phase 5: ShipGen, error injection and dataset**
+**Phase 5: Full reference coverage (open world)**
+- Load the complete official lists the checks rely on, so any product, port and destination can be checked (Section 4, "Open world"): every 8-digit ITC(HS) code with its description and unit; the Schedule 2 export policy exceptions (Restricted, Prohibited, STE and their conditions; any code not listed is Free); the full ICEGATE list of Indian customs port codes; ISO 4217 currencies.
+- Find the current official source for each first; where a source is only published as PDF, agree with the reviewer whether to parse it or curate it before building.
+- *Exit:* every code in the official lists resolves; the 21-code ITC-HS file and 12-port seed are replaced by full coverage; loaders report malformed rows with the file and line number.
+
+**Phase 6: ShipGen, error injection and dataset**
 - Labelled mutations mapped to rule IDs, look-alike non-errors, dataset builder with a stable dev / validation / test split.
 - *Exit:* ~200 labelled shipments on disk; every label names enabled rules.
 
-**Phase 6: ShipGen, document rendering**
+**Phase 7: ShipGen, document rendering**
 - Render each document type to PDF in 3 layouts; XLSX packing lists; scan and photo degradation.
 - *Exit:* every shipment has a full bundle of files that match its labels.
 
-**Phase 7: Evaluation harness and knowledge base**
+**Phase 8: Evaluation harness and knowledge base**
 - Harness that loads cases, runs a pipeline, scores fields and findings, and stores results; CI gate. Regulatory documents collected into an OpenAI vector store.
 - *Exit:* the harness produces a (failing) baseline report.
 
 ### Stage B: Read the documents
 
-**Phase 8: API, upload and storage**
+**Phase 9: API, upload and storage**
 - FastAPI service, shipments and documents endpoints, upload to Cloudflare R2, Celery worker with Redis.
 - *Exit:* a bundle uploaded through the API is stored and listed.
 
-**Phase 9: Pre-processing and classification**
+**Phase 10: Pre-processing and classification**
 - Page rendering, text layer and OCR word boxes, document splitting; classifier on the Decisions API with a Responses API fallback.
 - *Exit:* classification accuracy measured by the harness.
 
-**Phase 10: Extraction and evidence**
+**Phase 11: Extraction and evidence**
 - Pydantic schemas per document type with evidence; extraction with Structured Outputs; normalisation of extracted values; evidence locator (quote → box).
 - *Exit:* field extraction ≥ 90% on the synthetic validation split; evidence boxes working.
 
-**Phase 11: Re-reader and model benchmark**
+**Phase 12: Re-reader and model benchmark**
 - Targeted re-read for missing or low-confidence fields; benchmark Sol vs Astra vs Luna; cost per shipment measured.
 - *Exit:* default models chosen and recorded with their numbers.
 
 ### Stage C: Check the documents
 
-**Phase 12: Deterministic rule engine**
-- All enabled DET rules, with unit and property tests; findings model with evidence.
-- *Exit:* DET-rule recall and precision measured on validation.
+**Phase 13: Deterministic rule engine**
+- All enabled DET rules, with unit and property tests; findings model with evidence. Each check returns pass, fail or **not verified**; a value missing from our reference data is reported as not verified, never as an error.
+- *Exit:* DET-rule recall and precision measured on validation; no finding raised only because a code is absent from reference data.
 
-**Phase 13: Semantic checks and compliance agent**
+**Phase 14: Semantic checks and compliance agent**
 - Decisions API checks (HS-03, DESC-01, PTY-01, PTY-02) with calibrated thresholds; compliance agent with File Search for DOC-01, COO-01, GST-01.
 - *Exit:* overall finding recall ≥ 90% and precision ≥ 85% on validation.
 
-**Phase 14: Verification and readiness score**
+**Phase 15: Verification and readiness score**
 - Critic agent, severity handling, readiness score.
 - *Exit:* precision gain from the Critic measured.
 
 ### Stage D: Agents, review and UI
 
-**Phase 15: Orchestrator and human approval**
+**Phase 16: Orchestrator and human approval**
 - Orchestrator with the Agents SDK, Drafter agent, guardrails and budgets, `needs_approval` tools, persisted run state, approvals API, live progress over SSE.
 - *Exit:* a full run pauses for approval and resumes.
 
-**Phase 16: Web app, queue and upload**
+**Phase 17: Web app, queue and upload**
 - Next.js app: login, work queue, new shipment upload with live progress.
 - *Exit:* a user can upload a bundle and watch it process.
 
-**Phase 17: Web app, report and evidence viewer**
+**Phase 18: Web app, report and evidence viewer**
 - Readiness report, evidence viewer with highlights, messages (copy to clipboard), incremental re-run on corrected documents.
 - *Exit:* the 3-minute demo flow (Section 14) works locally; MVP targets met (Section 16).
 
 ### Stage E: Deploy and showcase
 
-**Phase 18: Deployment**
+**Phase 19: Deployment**
 - Render Blueprint (API, worker, Postgres, Key Value), R2 production bucket, Vercel project; seed reference data and demo shipments.
 - *Exit:* public demo URL works end to end.
 
-**Phase 19: Hardening and showcase**
+**Phase 20: Hardening and showcase**
 - Red-team set, basic security pass, demo video, technical write-up with ablation results, submission to the OpenAI partner team.
 - *Exit:* showcase material delivered.
 
@@ -1121,28 +1137,29 @@ One developer covers architecture, backend, agents, frontend, data generation an
 
 ```
 /
-├── backend/                     # Python (uv project)
-│   ├── pyproject.toml
-│   ├── src/shipready/
+├── backend/                     # Python uv workspace: the product plus dev-only tooling
+│   ├── pyproject.toml           # shipready package; workspace root
+│   ├── src/shipready/           # the product: everything deployed
 │   │   ├── api/                 # FastAPI app and routers
 │   │   ├── worker/              # Celery tasks: preprocess, run pipeline, cleanup
 │   │   ├── agents/              # Agents SDK definitions, prompts, tools
-│   │   ├── schemas/             # Pydantic models (documents, findings) shared by API + agents
+│   │   ├── documents/           # Pydantic document models (extraction targets, ShipGen ground truth)
 │   │   ├── extraction/          # OpenAI calls, re-reader, evidence locator
 │   │   ├── rules/               # rule engine + rules.yaml catalogue
 │   │   ├── normalise/           # units, currency, FX, dates, codes, checksums (GSTIN, ISO 6346)
 │   │   ├── decisions/           # Decisions API client + Responses fallback
 │   │   ├── reference/           # loaders for ISO/UQC/ports/ITC-HS/FX
 │   │   ├── db/                  # SQLAlchemy models, session
-│   │   ├── reports/             # report JSON + PDF templates
-│   │   ├── datagen/             # ShipGen: catalogue, templates, degrade, mutations
-│   │   └── evals/               # harness, metrics, CI gate
+│   │   └── reports/             # report JSON + PDF templates
 │   ├── migrations/              # Alembic
-│   └── tests/
+│   ├── tests/
+│   ├── shipgen/                 # dev-only package, never deployed: synthetic shipments, error
+│   │                            #   injection, document rendering (Decision.md D-17)
+│   └── evals/                   # dev-only package (planned, Phase 8): harness, metrics, CI gate
 ├── web/                         # Next.js frontend (Vercel)
 ├── data/                        # downloaded reference files and generated datasets (git-ignored)
 ├── docs/                        # finalisation PDF, ADRs, runbooks
-├── docker-compose.yml           # local Postgres (Phase 2); Redis from Phase 8
+├── docker-compose.yml           # local Postgres (Phase 2); Redis from Phase 9
 ├── render.yaml                  # Render Blueprint
 ├── .github/workflows/ci.yml
 └── PLAN.md

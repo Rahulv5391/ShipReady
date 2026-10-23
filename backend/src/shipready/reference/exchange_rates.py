@@ -2,10 +2,14 @@
 
 import re
 from datetime import date
-from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from shipready.reference.files import ReferenceDataError, numbered_rows, read_text
+from shipready.reference.files import (
+    ReferenceDataError,
+    numbered_rows,
+    positive_decimal,
+    read_text,
+)
 
 COLUMNS = ("currency", "unit", "rate_inr", "valid_from", "notification")
 
@@ -25,7 +29,7 @@ def parse_exchange_rates(source: str, text: str) -> list[dict[str, Any]]:
             )
         if row["unit"] not in {str(unit) for unit in _UNITS}:
             raise ReferenceDataError(source, line, f"unit must be one of {_UNITS}")
-        rate = _positive_decimal(source, line, row["rate_inr"])
+        rate = positive_decimal(source, line, "rate_inr", row["rate_inr"])
         valid_from = _iso_date(source, line, row["valid_from"])
         if not row["notification"]:
             raise ReferenceDataError(source, line, "notification is empty")
@@ -41,16 +45,6 @@ def parse_exchange_rates(source: str, text: str) -> list[dict[str, Any]]:
 
 def load_exchange_rates() -> list[dict[str, Any]]:
     return parse_exchange_rates("exchange_rates.csv", read_text("exchange_rates.csv"))
-
-
-def _positive_decimal(source: str, line: int, value: str) -> Decimal:
-    try:
-        number = Decimal(value)
-    except InvalidOperation:
-        raise ReferenceDataError(source, line, f"rate_inr is not a number: {value!r}") from None
-    if not number.is_finite() or number <= 0:
-        raise ReferenceDataError(source, line, f"rate_inr must be positive: {value!r}")
-    return number
 
 
 def _iso_date(source: str, line: int, value: str) -> date:
