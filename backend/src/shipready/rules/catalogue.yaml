@@ -56,12 +56,12 @@
   source: Buyer purchase order (contract terms); UCP 600 Article 30 (unit price tolerance) when paid by letter of credit
 
 - id: FX-01
-  title: Exchange rate matches the CBIC export rate
-  description: The exchange rate used for the INR equivalent matches the CBIC export rate for the relevant date.
+  title: Exchange rate matches the customs export rate
+  description: The exchange rate used for the INR equivalent matches the customs export rate in force on the relevant date.
   check_type: DET
   severity: major
   prevents: Valuation or refund issues
-  source: Customs Act 1962, Section 14 (rate notified by CBIC applies); CBIC exchange-rate notifications
+  source: Customs Act 1962, Section 14; CBIC Circular 07/2024-Customs (since 4 July 2024 rates are published on ICEGATE by the Exchange Rate Automation Module)
 
 - id: INC-01
   title: Incoterm consistent and matches freight terms
@@ -139,7 +139,7 @@
   check_type: DET
   severity: blocker
   prevents: Rejection
-  source: ITC(HS) 2022 Schedule II (Export Policy), DGFT; Customs Tariff Act 1975 (8-digit tariff items)
+  source: ITC(HS) 2022 code list maintained by DGFT; Customs Tariff Act 1975 (8-digit tariff items)
 
 - id: HS-02
   title: HS code identical across documents
@@ -163,7 +163,7 @@
   check_type: DET
   severity: blocker
   prevents: Illegal export
-  source: Foreign Trade (Development and Regulation) Act 1992, Section 11; ITC(HS) 2022 Schedule II export policy
+  source: Foreign Trade (Development and Regulation) Act 1992, Section 11; ITC(HS) 2022 Schedule II export policy (DGFT's Restricted, Prohibited and STE lists and notifications)
 
 - id: POL-02
   title: Export policy conditions met

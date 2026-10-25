@@ -159,10 +159,10 @@ The goal is complete official coverage of each list (Section 4, "Open world"). A
 
 | Data | Source | Refresh |
 |---|---|---|
-| ITC-HS codes and export policy (Free / Restricted / Prohibited / STE, policy conditions) | DGFT ITC(HS) 2022, Schedule-II (Export Policy). Last amended by Notification 26/2026-27 (27 Jul 2026) to align with the Finance Act 2026 ([a2ztaxcorp](https://a2ztaxcorp.net/dgft-harmonises-schedule-ii-export-policy-under-itc-hs-2022-with-finance-act-2026/)) | On each DGFT notification |
-| Customs exchange rates (export rates) | CBIC exchange-rate notifications under Sec. 14 of the Customs Act; published roughly every two weeks | Fortnightly job + manual override |
-| Indian port codes and UN/LOCODEs | ICEGATE port code list, UN/LOCODE | Quarterly |
-| Countries, currencies | ISO 3166, ISO 4217 | Rare |
+| ITC-HS codes and export policy (Free / Restricted / Prohibited / STE) | DGFT's ITC(HS) code list and its Restricted, Prohibited and STE export lists (ITC(HS) 2022 Schedule-II, last amended by Notification 26/2026-27), each listed code checked against DGFT's current per-code policy; dated periods for time-bound changes (Decision.md D-18, D-19) | On each DGFT notification |
+| Customs exchange rates (export rates) | ICEGATE exchange rate notifications, published by CBIC's Exchange Rate Automation Module since 4 July 2024 (Circular 07/2024-Customs), usually on the 1st and 3rd Thursday (D-20) | After each notification |
+| Indian port codes and UN/LOCODEs | DGFT's port master (sourced from ICEGATE); UNECE UN/LOCODE release | Quarterly; UN/LOCODE twice a year |
+| Countries, currencies | ISO 3166 (packaged file); ISO 4217 from SIX, the maintenance agency | Rare |
 | UQC (unit quantity codes) | CBIC / GST UQC list | Rare |
 | FTA list and origin rules | DGFT Certificate of Origin platform (coo.dgft.gov.in); agreements such as AIFTA, IJCEPA, SAFTA, India-Korea CEPA, etc. | On change |
 | ICEGATE error codes (SB, EGM, BE) | ICEGATE, summarised by [ebrc.in](https://ebrc.in/resources/shipping-bill-and-icegate-error-codes) | On change |
@@ -1050,9 +1050,9 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - *Exit:* generated shipments are deterministic, format-valid and internally consistent.
 
 **Phase 5: Full reference coverage (open world)**
-- Load the complete official lists the checks rely on, so any product, port and destination can be checked (Section 4, "Open world"): every 8-digit ITC(HS) code with its description and unit; the Schedule 2 export policy exceptions (Restricted, Prohibited, STE and their conditions; any code not listed is Free); the full ICEGATE list of Indian customs port codes; ISO 4217 currencies.
-- Find the current official source for each first; where a source is only published as PDF, agree with the reviewer whether to parse it or curate it before building.
-- *Exit:* every code in the official lists resolves; the 21-code ITC-HS file and 12-port seed are replaced by full coverage; loaders report malformed rows with the file and line number.
+- Fetch the complete official lists the checks rely on and load them with strict validation, so any product, port and destination can be checked (Section 4, "Open world"): every ITC(HS) code; the export policy as dated periods (Restricted, Prohibited, STE; any code not listed is Free), verified against DGFT's current per-code policy; all Indian customs locations; ISO 4217 currencies; the full ICEGATE exchange-rate history; UN/LOCODE (Decision.md D-18 to D-21).
+- Fetching and loading are commands run by hand; scheduling them is part of Phase 19.
+- *Exit:* every code in the official lists resolves; the curated subsets are replaced; malformed or truncated downloads are rejected with the file and line or entry, leaving the loaded data unchanged.
 
 **Phase 6: ShipGen, error injection and dataset**
 - Labelled mutations mapped to rule IDs, look-alike non-errors, dataset builder with a stable dev / validation / test split.
@@ -1116,7 +1116,8 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 
 **Phase 19: Deployment**
 - Render Blueprint (API, worker, Postgres, Key Value), R2 production bucket, Vercel project; seed reference data and demo shipments.
-- *Exit:* public demo URL works end to end.
+- Scheduled reference sync: a Render cron job runs the Phase 5 fetch and load (exchange rates after each Thursday publication, the rest weekly), with a sync log, a report of what changed (e.g. a code's policy moving from Prohibited to Restricted), a guard against sharp drops in row counts, and an alert when a source fails.
+- *Exit:* public demo URL works end to end; reference data refreshes on schedule and a failing source leaves the previous data in place.
 
 **Phase 20: Hardening and showcase**
 - Red-team set, basic security pass, demo video, technical write-up with ablation results, submission to the OpenAI partner team.
