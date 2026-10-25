@@ -8,6 +8,7 @@ from itertools import pairwise
 from shipgen import profiles
 from shipgen.generator import container_plan, financial_year, rate_on
 from shipgen.models import Shipment
+from shipgen.reference import load_itc_hs
 from shipready.normalise.containers import is_valid_container
 from shipready.normalise.identifiers import (
     is_valid_ad_code,
@@ -15,7 +16,6 @@ from shipready.normalise.identifiers import (
     is_valid_iec,
     pan_from_gstin,
 )
-from shipready.reference.itc_hs import load_itc_hs
 from shipready.reference.uqc import UQC
 
 CENTS = Decimal("0.01")
@@ -59,7 +59,7 @@ def _check_identifiers(s: Shipment) -> list[str]:
 
 
 def _check_goods(s: Shipment) -> list[str]:
-    itc_hs = {row["code"]: row for row in load_itc_hs()}
+    itc_hs = load_itc_hs()
     problems = []
     for line in s.lines:
         hs = itc_hs.get(line.hs_code)

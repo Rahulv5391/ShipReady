@@ -31,7 +31,7 @@ EXPORTER_STATES = (
     IndianState("06", "Haryana", ("Gurugram", "Panipat"), "1"),
 )
 
-# Keys must be countries that have a foreign port in reference/data/ports.csv.
+# Keys must be countries that have a foreign port in shipgen/data/ports.csv.
 DESTINATIONS = {
     "AE": Destination("en_GB", ("Dubai", "Sharjah"), "AED"),
     "SA": Destination("en_GB", ("Jeddah", "Riyadh"), "SAR"),

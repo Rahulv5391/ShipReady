@@ -16,11 +16,10 @@ from shipgen import profiles
 from shipgen.documents import chargeable_weight
 from shipgen.models import Exporter, LineItem, Lut, Mode, Shipment, Transport
 from shipgen.products import Product, load_products
+from shipgen.reference import load_exchange_rates, load_ports
 from shipready.documents.models import Address, Container, Party, Port
 from shipready.normalise.containers import check_digit
 from shipready.normalise.identifiers import gstin_check_char
-from shipready.reference.exchange_rates import load_exchange_rates
-from shipready.reference.files import read_csv
 
 CENTS = Decimal("0.01")
 GRAMS = Decimal("0.001")
@@ -52,8 +51,8 @@ def _reference() -> _Reference:
     products: dict[str, list[Product]] = {}
     for product in load_products():
         products.setdefault(product.category, []).append(product)
-    port_rows = read_csv("ports.csv")
-    rates = tuple(load_exchange_rates())
+    port_rows = load_ports()
+    rates = load_exchange_rates()
     valid_from = [rate["valid_from"] for rate in rates]
     return _Reference(
         products_by_category={key: tuple(value) for key, value in sorted(products.items())},

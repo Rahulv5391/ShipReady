@@ -3,13 +3,13 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
+from shipgen.reference import load_itc_hs
 from shipready.reference.files import (
     ReferenceDataError,
     numbered_rows,
     positive_decimal,
     read_text,
 )
-from shipready.reference.itc_hs import load_itc_hs
 
 COLUMNS = (
     "sku",
@@ -61,7 +61,7 @@ class Product:
 
 def parse_products(source: str, text: str) -> list[Product]:
     """Validate the catalogue: every HS code must be Free in ITC-HS, with the same unit."""
-    itc_hs = {row["code"]: row for row in load_itc_hs()}
+    itc_hs = load_itc_hs()
     products = []
     for line, row in numbered_rows(source, text, COLUMNS):
         hs = itc_hs.get(row["hs_code"])

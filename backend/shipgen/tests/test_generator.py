@@ -62,10 +62,10 @@ def test_non_usd_shipments_are_converted_through_inr() -> None:
 @pytest.mark.parametrize(
     ("day", "notification"),
     [
-        (date(2026, 9, 18), "27/2026-Customs (N.T.)"),
-        (date(2026, 10, 1), "27/2026-Customs (N.T.)"),
-        (date(2026, 10, 2), "28/2026-Customs (N.T.)"),
-        (date(2026, 12, 31), "29/2026-Customs (N.T.)"),
+        (date(2026, 9, 18), "27/2026"),
+        (date(2026, 10, 1), "27/2026"),
+        (date(2026, 10, 2), "28/2026"),
+        (date(2026, 12, 31), "29/2026"),
     ],
 )
 def test_rate_on_picks_the_notification_in_force(day: date, notification: str) -> None:
