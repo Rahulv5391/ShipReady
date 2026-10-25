@@ -1,56 +1,88 @@
-"""CBIC customs exchange rates for exports, transcribed from notifications (Decision.md D-12)."""
+"""Parse customs exchange rates from ICEGATE's notifications (icegate-exchange-rates.json).
 
-import re
+Since 4 July 2024 (CBIC Circular 07/2024-Customs) rates are no longer gazette notifications: the
+Exchange Rate Automation Module publishes them on ICEGATE, usually on the 1st and 3rd Thursday of
+the month and sometimes in between, each in force from the date the notification states. Only
+export rates are kept, since ShipReady checks exports.
+"""
+
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
-from shipready.reference.files import (
-    ReferenceDataError,
-    numbered_rows,
-    positive_decimal,
-    read_text,
-)
+from shipready.reference.files import ReferenceDataError, indian_date, json_value
 
-COLUMNS = ("currency", "unit", "rate_inr", "valid_from", "notification")
-
-_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
-# CBIC quotes most currencies per 1 unit and a few (e.g. JPY) per 100 units.
-_UNITS = (1, 100)
+# ICEGATE quotes most currencies per 1 unit and a few (e.g. JPY, KRW) per 100 units.
+UNITS = (1, 100)
+# Each notification covers about 22 currencies; far fewer means a truncated response.
+MIN_CURRENCIES_PER_NOTIFICATION = 15
 
 
-def parse_exchange_rates(source: str, text: str) -> list[dict[str, Any]]:
-    """Validate exchange-rate CSV text; raise ReferenceDataError naming the file and line."""
-    rows: list[dict[str, Any]] = []
-    seen: set[tuple[str, date]] = set()
-    for line, row in numbered_rows(source, text, COLUMNS):
-        if not _CURRENCY_RE.match(row["currency"]):
+def parse_exchange_rates(
+    source: str,
+    data: bytes,
+    currencies: set[str],
+) -> list[dict[str, Any]]:
+    """Rows of currency, valid_from, unit, rate_inr (export), notification and published_on.
+
+    `currencies` are the ISO 4217 codes a rate may be given for.
+    """
+    payload = json_value(source, data)
+    if not isinstance(payload, dict) or not isinstance(payload.get("notifications"), list):
+        raise ReferenceDataError(source, None, "expected 'notifications' and 'details'")
+    details = payload.get("details")
+    if not isinstance(details, dict):
+        raise ReferenceDataError(source, None, "missing notification details")
+
+    rows: dict[tuple[str, date], dict[str, Any]] = {}
+    for position, entry in enumerate(payload["notifications"], start=1):
+        number = str(entry.get("notificationNumber", "")).strip()
+        detail = details.get(number)
+        if not number or not isinstance(detail, dict):
+            raise ReferenceDataError(source, position, f"no details for notification {number!r}")
+        published_on = indian_date(source, position, entry.get("notPublishDate"))
+        valid_from = indian_date(source, position, detail.get("notPublishDate"))
+        if valid_from < published_on:
             raise ReferenceDataError(
-                source, line, f"currency must be 3 letters: {row['currency']!r}"
+                source, position, f"{number} is in force before it was published"
             )
-        if row["unit"] not in {str(unit) for unit in _UNITS}:
-            raise ReferenceDataError(source, line, f"unit must be one of {_UNITS}")
-        rate = positive_decimal(source, line, "rate_inr", row["rate_inr"])
-        valid_from = _iso_date(source, line, row["valid_from"])
-        if not row["notification"]:
-            raise ReferenceDataError(source, line, "notification is empty")
-        key = (row["currency"], valid_from)
-        if key in seen:
-            raise ReferenceDataError(
-                source, line, f"duplicate rate for {row['currency']} on {valid_from}"
-            )
-        seen.add(key)
-        rows.append({**row, "unit": int(row["unit"]), "rate_inr": rate, "valid_from": valid_from})
-    return rows
+        rates = detail.get("currencyDetail")
+        if not isinstance(rates, list) or len(rates) < MIN_CURRENCIES_PER_NOTIFICATION:
+            raise ReferenceDataError(source, position, f"{number} has too few rates")
+        for rate in rates:
+            row = _rate(source, position, number, rate, currencies)
+            key = (row["currency"], valid_from)
+            if key in rows:
+                raise ReferenceDataError(
+                    source,
+                    position,
+                    f"{number} and {rows[key]['notification']} both set "
+                    f"{row['currency']} from {valid_from}",
+                )
+            rows[key] = {**row, "valid_from": valid_from, "published_on": published_on}
+    return list(rows.values())
 
 
-def load_exchange_rates() -> list[dict[str, Any]]:
-    return parse_exchange_rates("exchange_rates.csv", read_text("exchange_rates.csv"))
-
-
-def _iso_date(source: str, line: int, value: str) -> date:
-    try:
-        return date.fromisoformat(value)
-    except ValueError:
+def _rate(
+    source: str, position: int, number: str, rate: Any, currencies: set[str]
+) -> dict[str, Any]:
+    currency = str(rate.get("currencyCode", "")).strip() if isinstance(rate, dict) else ""
+    if currency not in currencies:
         raise ReferenceDataError(
-            source, line, f"valid_from must be YYYY-MM-DD: {value!r}"
-        ) from None
+            source, position, f"{number}: {currency!r} is not an ISO 4217 code"
+        )
+    export_rate, units = rate.get("cbicExport"), rate.get("units")
+    if not isinstance(export_rate, (Decimal, int)) or export_rate <= 0:
+        raise ReferenceDataError(source, position, f"{number}: bad export rate for {currency}")
+    try:
+        unit = Decimal(str(units))
+    except ArithmeticError:
+        unit = Decimal(0)
+    if unit not in UNITS:
+        raise ReferenceDataError(source, position, f"{number}: unit {units!r} for {currency}")
+    return {
+        "currency": currency,
+        "unit": int(unit),
+        "rate_inr": Decimal(export_rate),
+        "notification": number,
+    }

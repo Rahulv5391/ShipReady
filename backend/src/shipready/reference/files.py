@@ -2,9 +2,12 @@
 
 import csv
 import io
+import json
 from collections.abc import Iterator
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from importlib.resources import files
+from typing import Any
 
 
 class ReferenceDataError(ValueError):
@@ -47,3 +50,30 @@ def positive_decimal(source: str, line: int, name: str, value: str) -> Decimal:
     if not number.is_finite() or number <= 0:
         raise ReferenceDataError(source, line, f"{name} must be positive: {value!r}")
     return number
+
+
+def json_value(source: str, data: bytes) -> Any:
+    """Decode JSON, keeping decimal numbers exact (rates must not pass through float)."""
+    try:
+        return json.loads(data, parse_float=Decimal)
+    except ValueError as error:
+        raise ReferenceDataError(source, None, f"not valid JSON ({error})") from None
+
+
+def json_list(source: str, data: bytes) -> list[Any]:
+    value = json_value(source, data)
+    if not isinstance(value, list):
+        raise ReferenceDataError(source, None, "expected a JSON list")
+    return value
+
+
+def indian_date(source: str, position: int | None, value: object) -> date:
+    """Parse a day-month-year date as DGFT and ICEGATE print them: 17-06-2025, 17/06/2025 or
+    17.06.2025."""
+    text = value.strip() if isinstance(value, str) else ""
+    for layout in ("%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(text, layout).date()
+        except ValueError:
+            continue
+    raise ReferenceDataError(source, position, f"expected a DD-MM-YYYY date, got {value!r}")

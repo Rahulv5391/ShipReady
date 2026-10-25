@@ -1,45 +1,50 @@
+import json
+from collections.abc import Callable
+
 import pytest
 
 from shipready.reference.files import ReferenceDataError
-from shipready.reference.itc_hs import load_itc_hs, parse_itc_hs
-
-HEADER = "code,description,chapter,export_policy,uqc,source\n"
-VALID = "61091000,Of cotton,Apparel,Free,NOS,DGFT\n"
+from shipready.reference.itc_hs import parse_itc_hs
 
 
-def test_packaged_codes_load() -> None:
-    rows = {row["code"]: row for row in load_itc_hs()}
-    assert len(rows) == 21
-    assert rows["61091000"]["description"] == "Of cotton"
-    assert rows["17019990"]["export_policy"] == "Restricted"
-    assert {row["export_policy"] for row in rows.values()} == {"Free", "Restricted"}
+def entries(*pairs: tuple[str, str]) -> bytes:
+    return json.dumps([{"itcCode": code, "itcDescription": text} for code, text in pairs]).encode()
 
 
-def test_valid_row_is_returned_stripped() -> None:
-    (row,) = parse_itc_hs("x.csv", HEADER + "61091000, Of cotton ,Apparel,Free,NOS,DGFT\n")
-    assert row == {
-        "code": "61091000",
-        "description": "Of cotton",
-        "chapter": "Apparel",
-        "export_policy": "Free",
-        "uqc": "NOS",
-        "source": "DGFT",
-    }
+@pytest.mark.usefixtures("small_minimums")
+def test_parses_the_dgft_tree(reference_file: Callable[[str], bytes]) -> None:
+    rows = {row["code"]: row for row in parse_itc_hs("itc", reference_file("dgft-itc-hs.json"))}
+    assert rows["17"]["level"] == 2
+    assert rows["1701"]["level"] == 4
+    assert rows["61091000"] == {"code": "61091000", "level": 8, "description": "Of cotton"}
+    assert sum(1 for row in rows.values() if row["level"] == 8) == 11
+
+
+@pytest.mark.usefixtures("small_minimums")
+def test_whitespace_is_cleaned_and_the_first_duplicate_kept(
+    reference_file: Callable[[str], bytes],
+) -> None:
+    # DGFT lists heading 8901 twice, once as "8901\n\n" with a padded description.
+    rows = {row["code"]: row for row in parse_itc_hs("itc", reference_file("dgft-itc-hs.json"))}
+    assert rows["8901"]["description"].startswith("Cruise ships, excursion boats")
+    assert "  " not in rows["8901"]["description"]
 
 
 @pytest.mark.parametrize(
-    ("text", "message"),
+    ("data", "message"),
     [
-        ("code,description\n" + VALID, r"x\.csv:1: expected columns"),
-        (HEADER + "61091000,Of cotton,Apparel,Free\n", r"x\.csv:2: expected 6 fields"),
-        (HEADER + VALID + "6109100,Of cotton,Apparel,Free,NOS,DGFT\n", r"x\.csv:3: code must be 8"),
-        (HEADER + VALID + VALID, r"x\.csv:3: duplicate code 61091000"),
-        (HEADER + VALID.replace("Free", "Open"), r"x\.csv:2: export_policy must be"),
-        (HEADER + VALID.replace("NOS", "KG"), r"x\.csv:2: not a UQC code: 'KG'"),
-        (HEADER + VALID.replace("Of cotton", " "), r"x\.csv:2: description is empty"),
-        (HEADER + VALID.replace("DGFT", ""), r"x\.csv:2: source is empty"),
+        (b"<html>error</html>", "itc: not valid JSON"),
+        (b'{"a": 1}', "itc: expected a JSON list"),
+        (b'["text"]', "itc:1: expected an object"),
+        (entries(("6109100", "Of cotton")), "itc:1: invalid ITC\\(HS\\) code '6109100'"),
+        (entries(("61091000", "  ")), "itc:1: code 61091000 has no description"),
     ],
 )
-def test_malformed_rows_name_the_file_and_line(text: str, message: str) -> None:
+def test_malformed_entries_are_rejected(data: bytes, message: str) -> None:
     with pytest.raises(ReferenceDataError, match=message):
-        parse_itc_hs("x.csv", text)
+        parse_itc_hs("itc", data)
+
+
+def test_a_truncated_list_is_rejected() -> None:
+    with pytest.raises(ReferenceDataError, match="only 1 eight-digit codes"):
+        parse_itc_hs("itc", entries(("61091000", "Of cotton")))

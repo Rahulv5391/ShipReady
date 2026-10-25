@@ -1,0 +1,87 @@
+{
+ "lists": {
+  "Restricted": [
+   {
+    "itcCode": "17011490",
+    "itcDescription": "Other                   ",
+    "notificationNo": "17/2025-26",
+    "notificationDate": "17-06-2025"
+   },
+   {
+    "itcCode": "17019990",
+    "itcDescription": "Other",
+    "notificationNo": "17/2025-26",
+    "notificationDate": "17-06-2025"
+   },
+   {
+    "itcCode": "29031920",
+    "itcDescription": "Trichloroethane",
+    "notificationNo": "",
+    "notificationDate": ""
+   },
+   {
+    "itcCode": "29031921",
+    "itcDescription": "<p><span style=\"font-size:12.0pt\"><span style=\"font-family:&quot;Times New Roman&quot;,&quot;serif&quot;\">--- Trichloroethane:<br />\n---- 1,1,1-Trichloroethane (methyl chloroform)</span></span></p>\n",
+    "notificationNo": null,
+    "notificationDate": null
+   },
+   {
+    "itcCode": "29031929",
+    "itcDescription": "<p><span style=\"font-size:12.0pt\"><span style=\"font-family:&quot;Times New Roman&quot;,&quot;serif&quot;\">--- Trichloroethane:<br />\n---- Other</span></span></p>\n",
+    "notificationNo": null,
+    "notificationDate": null
+   }
+  ],
+  "Prohibited": [
+   {
+    "itcCode": "17011490",
+    "itcDescription": "Other                   ",
+    "notificationNo": "16/2026-27",
+    "notificationDate": "13/05/2026"
+   },
+   {
+    "itcCode": "17019990",
+    "itcDescription": "Other",
+    "notificationNo": "16/2026-27",
+    "notificationDate": "13/05/2026"
+   },
+   {
+    "itcCode": "47020000",
+    "itcDescription": "Chemical wood pulp, dissolving grades.",
+    "notificationNo": "",
+    "notificationDate": ""
+   },
+   {
+    "itcCode": "47020010",
+    "itcDescription": "--- Rayon grade wood pulp",
+    "notificationNo": null,
+    "notificationDate": null
+   },
+   {
+    "itcCode": "47020090",
+    "itcDescription": "--- Other",
+    "notificationNo": null,
+    "notificationDate": null
+   }
+  ],
+  "STE": [
+   {
+    "itcCode": "25085031",
+    "itcDescription": " Sillimanite ---- Lumps",
+    "notificationNo": "",
+    "notificationDate": ""
+   }
+  ]
+ },
+ "current": {
+  "17011490": "Restricted",
+  "17019990": "Restricted",
+  "25085031": "STE",
+  "29031920": "NA",
+  "29031921": "Restricted",
+  "29031929": "Restricted",
+  "47020000": "NA",
+  "47020010": "Prohibited",
+  "47020090": "Prohibited"
+ }
+}

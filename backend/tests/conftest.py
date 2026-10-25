@@ -8,7 +8,31 @@ from alembic.config import Config
 from sqlalchemy import Connection, Engine, create_engine
 from sqlalchemy.orm import Session
 
+from shipready.reference import currencies, exchange_rates, itc_hs, ports
+
 PYPROJECT = Path(__file__).parents[1] / "pyproject.toml"
+# Small real excerpts of each official download (same file names as the fetch writes).
+REFERENCE_FIXTURES = Path(__file__).parent / "fixtures" / "reference"
+
+
+@pytest.fixture
+def small_minimums(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lower the "too few rows" guards so the small fixture files pass them."""
+    monkeypatch.setattr(itc_hs, "MIN_EIGHT_DIGIT_CODES", 5)
+    monkeypatch.setattr(ports, "MIN_PORTS", 5)
+    monkeypatch.setattr(currencies, "MIN_CURRENCIES", 5)
+    monkeypatch.setattr(exchange_rates, "MIN_CURRENCIES_PER_NOTIFICATION", 3)
+
+
+@pytest.fixture
+def reference_dir() -> Path:
+    return REFERENCE_FIXTURES
+
+
+@pytest.fixture
+def reference_file() -> Callable[[str], bytes]:
+    """Bytes of a reference fixture by its download file name."""
+    return lambda name: (REFERENCE_FIXTURES / name).read_bytes()
 
 
 @pytest.fixture(scope="session")

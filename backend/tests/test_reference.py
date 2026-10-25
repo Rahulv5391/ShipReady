@@ -1,10 +1,10 @@
-from shipready.reference.files import read_csv
+from datetime import date
+
+import pytest
+
+from shipready.reference.files import ReferenceDataError, indian_date, read_csv
 
 COUNTRIES = {row["code"]: row["name"] for row in read_csv("countries.csv")}
-PORTS = read_csv("ports.csv")
-
-# Last character of an ICEGATE port code: 1 seaport, 4 air cargo complex, 6 inland container depot.
-ICEGATE_SUFFIX = {"sea": "1", "air": "4", "icd": "6"}
 
 
 def test_countries_are_the_iso_3166_list() -> None:
@@ -14,22 +14,12 @@ def test_countries_are_the_iso_3166_list() -> None:
     assert COUNTRIES["BQ"] == "Bonaire, Sint Eustatius and Saba"
 
 
-def test_ports_are_unique_and_in_known_countries() -> None:
-    codes = [port["code"] for port in PORTS]
-    assert len(codes) == len(set(codes))
-    assert all(port["country"] in COUNTRIES for port in PORTS)
-    assert all(port["kind"] in ICEGATE_SUFFIX for port in PORTS)
-    assert all(port["unlocode"].startswith(port["country"]) for port in PORTS)
+@pytest.mark.parametrize("text", ["17-06-2025", "17/06/2025", "17.06.2025", " 17-06-2025 "])
+def test_indian_dates_in_every_layout_dgft_and_icegate_use(text: str) -> None:
+    assert indian_date("f", 1, text) == date(2025, 6, 17)
 
 
-def test_indian_ports_use_icegate_codes() -> None:
-    indian = [port for port in PORTS if port["country"] == "IN"]
-    assert indian
-    for port in indian:
-        assert port["code"] == port["unlocode"] + ICEGATE_SUFFIX[port["kind"]], port
-
-
-def test_foreign_ports_use_their_unlocode() -> None:
-    foreign = [port for port in PORTS if port["country"] != "IN"]
-    assert foreign
-    assert all(port["code"] == port["unlocode"] for port in foreign)
+@pytest.mark.parametrize("value", ["2025-06-17", "31-02-2025", "", None, 20250617])
+def test_other_dates_are_rejected(value: object) -> None:
+    with pytest.raises(ReferenceDataError, match="f:3: expected a DD-MM-YYYY date"):
+        indian_date("f", 3, value)

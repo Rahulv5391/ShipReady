@@ -1,0 +1,72 @@
+{
+ "notifications": [
+  {
+   "notificationNumber": "29/2026",
+   "notPublishDate": "15-10-2026"
+  },
+  {
+   "notificationNumber": "28/2026",
+   "notPublishDate": "01-10-2026"
+  }
+ ],
+ "details": {
+  "28/2026": {
+   "notificationNumber": "28/2026",
+   "status": 1,
+   "notPublishDate": "02-10-2026",
+   "currencyDetail": [
+    {
+     "currencyCode": "EUR",
+     "currencyDesc": "EURO",
+     "cbicImport": 110.5,
+     "cbicExport": 106.8,
+     "units": "1.0"
+    },
+    {
+     "currencyCode": "JPY",
+     "currencyDesc": "Japanese Yen",
+     "cbicImport": 61.6,
+     "cbicExport": 59.75,
+     "units": "100.0"
+    },
+    {
+     "currencyCode": "USD",
+     "currencyDesc": "US Dollar",
+     "cbicImport": 96.95,
+     "cbicExport": 95.25,
+     "units": "1.0"
+    }
+   ],
+   "error": null
+  },
+  "29/2026": {
+   "notificationNumber": "29/2026",
+   "status": 1,
+   "notPublishDate": "16-10-2026",
+   "currencyDetail": [
+    {
+     "currencyCode": "EUR",
+     "currencyDesc": "EURO",
+     "cbicImport": 108.55,
+     "cbicExport": 104.85,
+     "units": "1.0"
+    },
+    {
+     "currencyCode": "JPY",
+     "currencyDesc": "Japanese Yen",
+     "cbicImport": 61.2,
+     "cbicExport": 59.35,
+     "units": "100.0"
+    },
+    {
+     "currencyCode": "USD",
+     "currencyDesc": "US Dollar",
+     "cbicImport": 95.9,
+     "cbicExport": 94.2,
+     "units": "1.0"
+    }
+   ],
+   "error": null
+  }
+ }
+}

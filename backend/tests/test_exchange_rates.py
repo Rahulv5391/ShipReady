@@ -1,58 +1,94 @@
+import json
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
-from shipready.reference.exchange_rates import load_exchange_rates, parse_exchange_rates
+from shipready.reference.exchange_rates import parse_exchange_rates
 from shipready.reference.files import ReferenceDataError
 
-HEADER = "currency,unit,rate_inr,valid_from,notification\n"
-USD = "USD,1,90.00,2026-10-16,1/2026-Customs (N.T.)\n"
+CURRENCIES = {"USD", "EUR", "JPY"}
 
 
-def test_packaged_rates_cover_three_notifications() -> None:
-    rows = load_exchange_rates()
-    assert len(rows) == 66
-    assert {row["notification"] for row in rows} == {
-        "27/2026-Customs (N.T.)",
-        "28/2026-Customs (N.T.)",
-        "29/2026-Customs (N.T.)",
-    }
-    jpy = [row for row in rows if row["currency"] == "JPY"]
-    assert {row["unit"] for row in jpy} == {100}
+def rate(code: str = "USD", export: Any = 94.2, units: str = "1.0") -> dict[str, Any]:
+    return {"currencyCode": code, "cbicImport": 96.0, "cbicExport": export, "units": units}
 
 
-def test_valid_rows_are_typed() -> None:
-    rows = parse_exchange_rates("x.csv", HEADER + USD + "JPY,100,60.00,2026-10-16,1/2026\n")
-    assert rows[0] == {
+PADDING = [
+    {"currencyCode": "EUR", "cbicImport": 108.5, "cbicExport": 104.85, "units": "1.0"},
+    {"currencyCode": "JPY", "cbicImport": 61.2, "cbicExport": 59.35, "units": "100.0"},
+]
+
+
+def payload(
+    published: str = "15-10-2026", in_force: str = "16-10-2026", rates: list[Any] | None = None
+) -> bytes:
+    return json.dumps(
+        {
+            "notifications": [{"notificationNumber": "29/2026", "notPublishDate": published}],
+            "details": {
+                "29/2026": {
+                    "notificationNumber": "29/2026",
+                    "notPublishDate": in_force,
+                    "status": 1,
+                    # EUR and JPY pad every notification to the (lowered) minimum of three.
+                    "currencyDetail": [*(rates if rates is not None else [rate()]), *PADDING],
+                }
+            },
+        }
+    ).encode()
+
+
+@pytest.mark.usefixtures("small_minimums")
+def test_parses_icegate_notifications(reference_file: Callable[[str], bytes]) -> None:
+    rows = parse_exchange_rates("rates", reference_file("icegate-exchange-rates.json"), CURRENCIES)
+    by_key = {(row["currency"], row["valid_from"]): row for row in rows}
+    assert by_key[("USD", date(2026, 10, 16))] == {
         "currency": "USD",
         "unit": 1,
-        "rate_inr": Decimal("90.00"),
+        "rate_inr": Decimal("94.2"),
+        "notification": "29/2026",
         "valid_from": date(2026, 10, 16),
-        "notification": "1/2026-Customs (N.T.)",
+        "published_on": date(2026, 10, 15),
     }
-    assert rows[1]["unit"] == 100
+    assert by_key[("JPY", date(2026, 10, 2))]["unit"] == 100
+    assert by_key[("EUR", date(2026, 10, 2))]["rate_inr"] == Decimal("106.8")
+    assert len(rows) == 6
 
 
-def test_same_currency_on_different_dates_is_allowed() -> None:
-    rows = parse_exchange_rates("x.csv", HEADER + USD + USD.replace("2026-10-16", "2026-11-01"))
-    assert [row["valid_from"] for row in rows] == [date(2026, 10, 16), date(2026, 11, 1)]
+@pytest.mark.usefixtures("small_minimums")
+def test_rates_stay_exact_decimals() -> None:
+    rows = parse_exchange_rates("rates", payload(rates=[rate(export=0.1)]), CURRENCIES)
+    (row,) = [row for row in rows if row["currency"] == "USD"]
+    # 0.1 would be 0.1000000000000000055... had it passed through float.
+    assert row["rate_inr"] == Decimal("0.1")
 
 
 @pytest.mark.parametrize(
-    ("text", "message"),
+    ("data", "message"),
     [
-        ("currency,rate\n", r"x\.csv:1: expected columns"),
-        (HEADER + USD.replace("USD", "US"), r"x\.csv:2: currency must be 3 letters"),
-        (HEADER + USD.replace(",1,", ",10,"), r"x\.csv:2: unit must be one of"),
-        (HEADER + USD.replace("90.00", "n/a"), r"x\.csv:2: rate_inr is not a number"),
-        (HEADER + USD.replace("90.00", "0"), r"x\.csv:2: rate_inr must be positive"),
-        (HEADER + USD.replace("90.00", "NaN"), r"x\.csv:2: rate_inr must be positive"),
-        (HEADER + USD.replace("2026-10-16", "16/10/2026"), r"x\.csv:2: valid_from must be"),
-        (HEADER + USD.replace("1/2026-Customs (N.T.)", ""), r"x\.csv:2: notification is empty"),
-        (HEADER + USD + USD, r"x\.csv:3: duplicate rate for USD on 2026-10-16"),
+        (b"[]", "rates: expected 'notifications' and 'details'"),
+        (json.dumps({"notifications": []}).encode(), "missing notification details"),
+        (
+            json.dumps(
+                {"notifications": [{"notificationNumber": "1/2026"}], "details": {}}
+            ).encode(),
+            "rates:1: no details for notification '1/2026'",
+        ),
+        (payload(published="2026-10-15"), "expected a DD-MM-YYYY date"),
+        (payload(in_force="14-10-2026"), "29/2026 is in force before it was published"),
+        (payload(rates=[]), "29/2026 has too few rates"),
+        (payload(rates=[rate(code="XYZ")]), "'XYZ' is not an ISO 4217 code"),
+        (payload(rates=[rate(export=0)]), "bad export rate for USD"),
+        (payload(rates=[rate(export="94.2")]), "bad export rate for USD"),
+        (payload(rates=[rate(units="10.0")]), "unit '10.0' for USD"),
+        (payload(rates=[rate(units="one")]), "unit 'one' for USD"),
+        (payload(rates=[rate(), rate()]), "29/2026 and 29/2026 both set USD from 2026-10-16"),
     ],
 )
-def test_malformed_rows_name_the_file_and_line(text: str, message: str) -> None:
+@pytest.mark.usefixtures("small_minimums")
+def test_malformed_notifications_are_rejected(data: bytes, message: str) -> None:
     with pytest.raises(ReferenceDataError, match=message):
-        parse_exchange_rates("x.csv", text)
+        parse_exchange_rates("rates", data, CURRENCIES)

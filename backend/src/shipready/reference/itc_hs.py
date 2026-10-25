@@ -1,39 +1,44 @@
-"""ITC(HS) codes with their export policy, curated from DGFT (see Decision.md D-12)."""
+"""Parse DGFT's ITC(HS) code list (dgft-itc-hs.json): chapters, headings, subheadings and the
+8-digit codes goods are declared under."""
 
 import re
 from typing import Any
 
-from shipready.reference.files import ReferenceDataError, numbered_rows, read_text
-from shipready.reference.uqc import UQC
+from shipready.reference.files import ReferenceDataError, json_list
 
-EXPORT_POLICIES = ("Free", "Restricted", "Prohibited", "STE")
-COLUMNS = ("code", "description", "chapter", "export_policy", "uqc", "source")
+# The full list has about 12,500 eight-digit codes; far fewer means a truncated download.
+MIN_EIGHT_DIGIT_CODES = 10_000
 
-_CODE_RE = re.compile(r"^[0-9]{8}$")
-
-
-def parse_itc_hs(source: str, text: str) -> list[dict[str, Any]]:
-    """Validate ITC(HS) CSV text; raise ReferenceDataError naming the file and line."""
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for line, row in numbered_rows(source, text, COLUMNS):
-        if not _CODE_RE.match(row["code"]):
-            raise ReferenceDataError(source, line, f"code must be 8 digits, got {row['code']!r}")
-        if row["code"] in seen:
-            raise ReferenceDataError(source, line, f"duplicate code {row['code']}")
-        if row["export_policy"] not in EXPORT_POLICIES:
-            raise ReferenceDataError(
-                source, line, f"export_policy must be one of {EXPORT_POLICIES}"
-            )
-        if row["uqc"] not in UQC:
-            raise ReferenceDataError(source, line, f"not a UQC code: {row['uqc']!r}")
-        for column in ("description", "chapter", "source"):
-            if not row[column]:
-                raise ReferenceDataError(source, line, f"{column} is empty")
-        seen.add(row["code"])
-        rows.append(row)
-    return rows
+_CODE_RE = re.compile(r"^[0-9]{2}(?:[0-9]{2}(?:[0-9]{2}(?:[0-9]{2})?)?)?$")
 
 
-def load_itc_hs() -> list[dict[str, Any]]:
-    return parse_itc_hs("itc_hs.csv", read_text("itc_hs.csv"))
+def parse_itc_hs(source: str, data: bytes) -> list[dict[str, Any]]:
+    """One row per code: code, level (2, 4, 6 or 8 digits) and description.
+
+    DGFT's list pads some codes and descriptions with whitespace and repeats a few codes; the
+    first entry for a code is kept. Errors name the entry by its position in the list.
+    """
+    entries = json_list(source, data)
+    rows: dict[str, dict[str, Any]] = {}
+    for position, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            raise ReferenceDataError(source, position, f"expected an object, got {entry!r}")
+        code = _clean(entry.get("itcCode"))
+        description = _clean(entry.get("itcDescription"))
+        if not _CODE_RE.match(code):
+            raise ReferenceDataError(source, position, f"invalid ITC(HS) code {code!r}")
+        if not description:
+            raise ReferenceDataError(source, position, f"code {code} has no description")
+        rows.setdefault(code, {"code": code, "level": len(code), "description": description})
+    eight_digit = sum(1 for row in rows.values() if row["level"] == 8)
+    if eight_digit < MIN_EIGHT_DIGIT_CODES:
+        raise ReferenceDataError(
+            source,
+            None,
+            f"only {eight_digit} eight-digit codes (expected at least {MIN_EIGHT_DIGIT_CODES})",
+        )
+    return list(rows.values())
+
+
+def _clean(value: object) -> str:
+    return re.sub(r"\s+", " ", value).strip() if isinstance(value, str) else ""
