@@ -1060,6 +1060,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 
 **Phase 7: ShipGen, document rendering**
 - Render each document type to PDF in 3 layouts; XLSX packing lists; scan and photo degradation.
+- Missing-document errors (DOC-01) are injected here, by leaving a required document out of a bundle (Decision.md D-22).
 - *Exit:* every shipment has a full bundle of files that match its labels.
 
 **Phase 8: Evaluation harness and knowledge base**
