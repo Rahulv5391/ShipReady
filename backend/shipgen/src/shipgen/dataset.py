@@ -5,7 +5,8 @@ uv run python -m shipgen.dataset --count 200 --seed 42 --out ../data/dataset
 
 Each case keeps the golden shipment (the truth), the documents as they would be printed (with the
 errors and look-alikes in them, so the ground truth for extraction) and the labels (the ground
-truth for findings). The same seed always gives the same dataset.
+truth for findings), plus the bundle of files drawn from those documents (shipgen.bundle). The
+same seed always gives the same dataset.
 """
 
 import argparse
@@ -13,22 +14,25 @@ import hashlib
 import json
 import random
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Literal
 
+from shipgen.bundle import write_bundle
 from shipgen.consistency import check_shipment
 from shipgen.documents import build_documents
 from shipgen.generator import generate_shipment
 from shipgen.lookalikes import LOOKALIKES
 from shipgen.models import Shipment
-from shipgen.mutations import MUTATIONS, Label, Mutation, apply
+from shipgen.mutations import MUTATIONS, Label, Mutation, apply, missing_document
 from shipgen.oracle import CHECKS, violations
 from shipready.documents.models import Model, ShipmentDocuments
 
 Split = Literal["dev", "validation", "test"]
 # Cumulative percentage bounds: 60% dev, 20% validation, 20% test.
 SPLITS: tuple[tuple[Split, int], ...] = (("dev", 60), ("validation", 80), ("test", 100))
-CLEAN_SHARE = 0.3
+CLEAN_SHARE = 0.3  # cases without a planted field error
+MISSING_SHARE = 0.3  # of those, cases missing a required document (DOC-01)
 MAX_ERRORS = 4
 MAX_LOOKALIKES = 2
 
@@ -64,6 +68,10 @@ def build_case(seed: int, index: int) -> Case:
     documents = build_documents(shipment)
     labels: list[Label] = []
     documents = _inject(documents, MUTATIONS, errors, rng, labels)
+    # A missing document only in cases without field errors: with the invoice missing, a planted
+    # invoice mismatch could not be found, and its label would be wrong.
+    if errors == 0 and rng.random() < MISSING_SHARE:
+        labels.append(missing_document(documents, rng))
     documents = _inject(documents, LOOKALIKES, lookalikes, rng, labels)
     case = Case(
         shipment_id=shipment.shipment_id,
@@ -109,30 +117,41 @@ def _inject(
 
 
 def _overlaps(a: Label, b: Label) -> bool:
-    return bool(_touched(a) & _touched(b))
+    return any(
+        document_a == document_b and (field_a == field_b or "" in (field_a, field_b))
+        for document_a, field_a in _touched(a)
+        for document_b, field_b in _touched(b)
+    )
 
 
-def _touched(label: Label) -> set[str]:
-    # Changes collide on the same document field. Lines collide only on the same line, so
-    # errors can sit on different lines; containers collide on any container, since one
-    # mutation replaces the whole tuple.
+def _touched(label: Label) -> set[tuple[str, str]]:
+    """(document, top-level field) pairs; an empty field is the whole document. Lines collide
+    only on the same line, so errors can sit on different lines; containers collide on any
+    container, since one mutation replaces the whole tuple."""
     keys = set()
     for change in label.changes:
         head = change.field.split(".")[0]
-        keys.add(f"{change.document}.{head}")
+        keys.add((change.document, head))
         if "[" in head and not head.startswith("lines["):
-            keys.add(f"{change.document}.{head.split('[')[0]}")
+            keys.add((change.document, head.split("[")[0]))
     return keys
 
 
-def write_dataset(count: int, seed: int, out: Path) -> list[Case]:
+def write_dataset(count: int, seed: int, out: Path, files: bool = True) -> list[Case]:
+    """Write each case to {out}/{split}/{shipment_id}/: case.json and, unless `files` is False,
+    its bundle of document files with bundle.json."""
     if out.exists() and any(out.iterdir()):
         raise FileExistsError(f"{out} is not empty; remove it or choose another --out")
     cases = [build_case(seed, index) for index in range(count)]
-    for case in cases:
-        path = out / case.split / f"{case.shipment_id}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(case.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    folders = [out / case.split / case.shipment_id for case in cases]
+    for case, folder in zip(cases, folders, strict=True):
+        folder.mkdir(parents=True)
+        (folder / "case.json").write_text(case.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    if files:
+        # Rendering takes seconds per case and each case has its own generator, so cases are
+        # drawn in parallel without changing the output.
+        with ProcessPoolExecutor() as pool:
+            list(pool.map(_write_bundle, cases, folders))
     manifest = {
         "seed": seed,
         "count": count,
@@ -149,6 +168,10 @@ def write_dataset(count: int, seed: int, out: Path) -> list[Case]:
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return cases
+
+
+def _write_bundle(case: Case, folder: Path) -> None:
+    write_bundle(case.shipment_id, case.documents, case.labels, folder)
 
 
 def summary(cases: list[Case]) -> list[str]:
@@ -168,12 +191,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--count", type=int, required=True, help="number of shipments")
     parser.add_argument("--seed", type=int, required=True, help="seed; same seed, same dataset")
     parser.add_argument("--out", type=Path, required=True, help="empty output directory")
+    parser.add_argument(
+        "--labels-only",
+        action="store_true",
+        help="write case.json files only, without rendering documents (seconds, not minutes)",
+    )
     args = parser.parse_args(argv)
     if args.count < 1:
         parser.error("--count must be at least 1")
 
     try:
-        cases = write_dataset(args.count, args.seed, args.out)
+        cases = write_dataset(args.count, args.seed, args.out, files=not args.labels_only)
     except FileExistsError as error:
         parser.error(str(error))
     print(f"wrote {args.out}")

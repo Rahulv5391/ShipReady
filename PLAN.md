@@ -914,8 +914,8 @@ There is **no public dataset of Indian export shipment bundles** (people on Hugg
 A Python package in the repo (`datagen/`) that creates realistic shipment bundles **with known ground truth**.
 
 1. **Golden shipment JSON:** exporter (Faker `en_IN`, valid-format IEC/GSTIN/PAN with correct checksum, fictitious names), consignee (by destination country), 1–15 line items drawn from a **product catalogue built from real ITC-HS codes and descriptions** (DGFT schedule), realistic prices, qty, UQC, weights, packages, containers (valid ISO 6346 numbers), ports, Incoterm, payment terms, CBIC exchange rate for the date, LUT ARN.
-2. **Render documents** from the golden JSON with Jinja2 HTML templates → PDF (WeasyPrint): **≥10 layouts per document type** (ERP-style, Tally-style, handmade Word, forwarder B/L forms, DGFT-style COO), plus XLSX packing lists and `.eml` emails.
-3. **Degrade realistically:** print-and-scan simulation with **Augraphy** (noise, blur, skew, folds, low DPI), phone photos (perspective, shadows), stamps and signatures overlaid, multi-document PDFs merged in random order, rotated pages, partial handwriting annotations.
+2. **Render documents** from the golden JSON to PDF with ReportLab (WeasyPrint needs GTK system libraries that are not available on Windows; Decision.md D-23): **≥10 layouts per document type** (ERP-style, Tally-style, handmade Word, forwarder B/L forms, DGFT-style COO; 3 built in Phase 7), plus XLSX packing lists and `.eml` emails.
+3. **Degrade realistically:** print-and-scan simulation with Pillow (noise, blur, skew, low DPI; Augraphy was dropped for its heavy dependencies), phone photos (perspective, shadows), stamps and signatures overlaid, multi-document PDFs merged in random order, rotated pages, partial handwriting annotations.
 4. **Inject errors** with labels. A mutation catalogue maps one-to-one to rule IDs, for example:
    - `qty_mismatch` → QTY-01
    - `hs_truncated_6` → HS-01

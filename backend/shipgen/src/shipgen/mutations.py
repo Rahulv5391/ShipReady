@@ -36,7 +36,7 @@ Choose = Callable[[ShipmentDocuments, random.Random], list[Edit] | None]
 
 class Change(Model):
     document: str  # a ShipmentDocuments field, e.g. "packing_list"
-    field: str  # path inside the document, e.g. "lines[0].quantity"
+    field: str  # path inside the document, e.g. "lines[0].quantity"; "" for the whole document
     original: JsonValue
     mutated: JsonValue
 
@@ -442,6 +442,31 @@ _MANDATORY_FIELDS: tuple[FieldPath, ...] = (
 
 def _blank_field(documents: ShipmentDocuments, rng: random.Random) -> list[Edit]:
     return [(rng.choice(_MANDATORY_FIELDS), "")]
+
+
+# The documents every export shipment needs. Leaving one out is a DOC-01 finding; it is taken
+# out of the bundle of files (shipgen.bundle), while the case keeps its values as the truth.
+MISSING_DOCUMENT = "document_missing"
+
+
+def missing_document(documents: ShipmentDocuments, rng: random.Random) -> Label:
+    required = (
+        "commercial_invoice",
+        "packing_list",
+        "shipping_bill",
+        transport_document(documents),
+    )
+    change = Change(document=rng.choice(required), field="", original="present", mutated="missing")
+    return Label(mutation=MISSING_DOCUMENT, rule_ids=("DOC-01",), changes=(change,))
+
+
+def missing_documents(labels: tuple[Label, ...]) -> set[str]:
+    return {
+        change.document
+        for label in labels
+        if label.mutation == MISSING_DOCUMENT
+        for change in label.changes
+    }
 
 
 MUTATIONS = (
