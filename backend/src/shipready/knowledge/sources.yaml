@@ -1,0 +1,91 @@
+# Regulatory texts for the compliance checks' knowledge base (PLAN.md Section 5.3), from official
+# government sites only. Fetched by `python -m shipready.knowledge.fetch`; where they are indexed
+# (OpenAI File Search or pgvector) is decided in Phase 14 (Decision.md D-24).
+#
+# version: the edition the URL serves, as the document states it. DGFT amends the Handbook of
+#   Procedures chapter by chapter, so amended chapters are listed next to the full 2023 edition.
+# used_by: the checks the text supports.
+#
+# Not listed, because no working official copy was found on 27 Oct 2026: Customs Brokers
+# Licensing Regulations 2018 (old.cbic.gov.in no longer resolves), CBIC Customs Manual 2023,
+# CBIC Circular 07/2024-Customs (the ICEGATE manual below restates it), and FTA agreement texts.
+
+- id: ftp-2023
+  title: Foreign Trade Policy 2023
+  issuer: DGFT
+  version: As issued, in force from 1 April 2023
+  url: https://content.dgft.gov.in/Website/dgftprod/61d61bc2-272e-4880-b96c-c8f685a3b244/Foreign%20Trade%20Policy%202023.pdf
+  format: pdf
+  used_by: [POL-01, POL-02, DOC-01, COO-01]
+
+- id: hbp-2023
+  title: Handbook of Procedures 2023
+  issuer: DGFT
+  version: As issued, in force from 1 April 2023
+  url: https://content.dgft.gov.in/Website/dgftprod/e1cb52ea-0c3a-4c2a-8cd7-dd992e9bdc98/HBP_2023.pdf
+  format: pdf
+  used_by: [POL-02, DOC-01, COO-01]
+
+- id: hbp-2023-chapter-02-amended
+  title: Handbook of Procedures 2023, Chapter 2 (General Provisions Regarding Imports and Exports)
+  issuer: DGFT
+  version: Amended chapter, file HBP_07_2026 created 30 July 2026 (the text states no date)
+  url: https://content.dgft.gov.in/Website/HBP_07_2026_Chapter_02.pdf
+  format: pdf
+  used_by: [POL-02, DOC-01, COO-01]
+
+- id: ftp-appendix-2a
+  title: Appendix 2A, List of Free Trade Agreements and Preferential Trade Agreements
+  issuer: DGFT
+  version: Updated as on 22 June 2023
+  url: https://content.dgft.gov.in/Website/dgftprod/94f11d66-5ebc-4997-b325-6515c6392669/Appendix%202A%20updated%20as%20on%2022.06.2023.pdf
+  format: pdf
+  used_by: [COO-01]
+
+- id: ftp-appendix-2b
+  title: Appendix 2B, Agencies Authorised to Issue Preferential Certificates of Origin
+  issuer: DGFT
+  version: As on 6 January 2023
+  url: https://content.dgft.gov.in/Website/dgftprod/ad977111-207c-431a-a8cc-54c1754484c0/Appendix%202B%20(Certificate%20of%20Origin%20%5BPreferential%5D)%20as%20on%2006.01.2023.pdf
+  format: pdf
+  used_by: [COO-01]
+
+- id: cgst-rule-96
+  title: CGST Rules 2017, Rule 96 (Refund of integrated tax paid on goods or services exported)
+  issuer: CBIC
+  version: Current text on CBIC's tax information portal
+  url: https://taxinformation.cbic.gov.in/content/html/tax_repository/gst/rules/cgst_rules/active/chapter10/rule96_v1.00.html
+  format: html
+  used_by: [GST-01, VAL-02, QTY-02]
+
+- id: cgst-rule-96a
+  title: CGST Rules 2017, Rule 96A (Export under bond or Letter of Undertaking)
+  issuer: CBIC
+  version: Current text on CBIC's tax information portal
+  url: https://taxinformation.cbic.gov.in/content/html/tax_repository/gst/rules/cgst_rules/active/chapter10/rule96a_v1.00.html
+  format: html
+  used_by: [GST-01, GST-02]
+
+- id: gst-circular-8-2017
+  title: Circular No. 8/8/2017-GST, Master circular on export under bond or LUT
+  issuer: CBIC
+  version: 4 October 2017
+  url: https://cbic-gst.gov.in/pdf/Final_Master_circular_LUT_Bond_04102017.pdf
+  format: pdf
+  used_by: [GST-01, GST-02]
+
+- id: gst-circular-37-2018
+  title: Circular No. 37/11/2018-GST, Clarifications on export related refund issues
+  issuer: CBIC
+  version: 15 March 2018
+  url: https://cbic-gst.gov.in/pdf/circularno-37-cgst.pdf
+  format: pdf
+  used_by: [GST-01, GST-02]
+
+- id: icegate-eram-manual
+  title: Exchange Rate Automation Module (ERAM) on ICEGATE 2.0, User Manual
+  issuer: CBIC (ICEGATE)
+  version: Version 1.01, July 2024; restates Circular 07/2024-Customs
+  url: https://www.icegate.gov.in/sites/default/files/2024-07/User%20Manual%20-%20Exchange%20Rates%20version%201.01.pdf
+  format: pdf
+  used_by: [FX-01]

@@ -1064,7 +1064,8 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - *Exit:* every shipment has a full bundle of files that match its labels.
 
 **Phase 8: Evaluation harness and knowledge base**
-- Harness that loads cases, runs a pipeline, scores fields and findings, and stores results; CI gate. Regulatory documents collected into an OpenAI vector store.
+- Harness (`evals`, dev-only) that loads cases, runs a pipeline, scores fields and findings, and writes a JSON and Markdown report; results move to `eval_*` tables once shipments and runs exist (Phase 9). CI runs it on the validation split and fails on any drop below a committed baseline; the Section 16 targets are reported, and enforced once a real pipeline exists.
+- Regulatory texts collected from official sites with versions and checksums (`shipready.knowledge`); whether they are indexed in an OpenAI vector store or pgvector is decided in Phase 14 (Decision.md D-24).
 - *Exit:* the harness produces a (failing) baseline report.
 
 ### Stage B: Read the documents
@@ -1092,7 +1093,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - *Exit:* DET-rule recall and precision measured on validation; no finding raised only because a code is absent from reference data.
 
 **Phase 14: Semantic checks and compliance agent**
-- Decisions API checks (HS-03, DESC-01, PTY-01, PTY-02) with calibrated thresholds; compliance agent with File Search for DOC-01, COO-01, GST-01.
+- Decisions API checks (HS-03, DESC-01, PTY-01, PTY-02) with calibrated thresholds; compliance agent with retrieval over the regulatory texts collected in Phase 8 (OpenAI File Search or pgvector, decided here) for DOC-01, COO-01, GST-01.
 - *Exit:* overall finding recall ≥ 90% and precision ≥ 85% on validation.
 
 **Phase 15: Verification and readiness score**
