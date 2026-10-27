@@ -25,7 +25,9 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.17.1",
     "shipgen",
+    "types-openpyxl>=3.1.5.20261017",
     "types-pyyaml>=6.0.12.20260906",
+    "types-reportlab>=5.0.0.20261008",
 ]
 
 [tool.uv.workspace]
@@ -45,6 +47,11 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 [tool.mypy]
 strict = true
 files = ["src", "tests", "migrations", "shipgen/src", "shipgen/tests"]
+
+[[tool.mypy.overrides]]
+# pypdfium2 ships without type hints and has no stub package.
+module = ["pypdfium2", "pypdfium2.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "shipgen/tests"]
