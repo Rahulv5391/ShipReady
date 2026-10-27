@@ -1,0 +1,16 @@
+{
+  "pipeline": "empty",
+  "split": "validation",
+  "git_sha": "7b64932",
+  "metrics": {
+    "classification_accuracy": 0.0,
+    "field_accuracy_digital": 0.0,
+    "field_accuracy_image": 0.0,
+    "line_item_f1": 0.0,
+    "finding_recall": 0.0,
+    "blocker_recall": 0.0,
+    "finding_precision": null,
+    "false_alarms_per_clean": 0.0,
+    "cost_per_shipment_usd": 0.0
+  }
+}

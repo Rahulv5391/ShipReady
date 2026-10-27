@@ -36,3 +36,6 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run pytest
+      # Evaluation gate: fails if any score on the validation split drops below evals/baseline.json.
+      - run: uv run python -m shipgen.dataset --count 200 --seed 42 --out ../data/dataset
+      - run: uv run python -m evals --pipeline empty --split validation --gate evals/baseline.json
