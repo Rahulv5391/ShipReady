@@ -291,7 +291,7 @@ Key Value on Render (Singapore region, closest to India) · documents in Cloudfl
 | Task queue | **Celery + Render Key Value** (Redis-compatible; Redis locally) | Long-running multi-document runs, retries, concurrency limits |
 | Database | **Render Postgres 16 + pgvector** | Relational core + JSONB for extracted payloads + vectors for product master similarity |
 | ORM / migrations | SQLAlchemy 2.0 + Alembic | Standard |
-| Object storage | **Cloudflare R2** (S3 API via boto3); a separate R2 dev bucket locally | Render has no object storage; R2 has a free tier and no egress fees |
+| Object storage | **Cloudflare R2** (S3 API via boto3); SeaweedFS in Docker locally (MinIO's images are no longer public; Decision.md D-25) | Render has no object storage; R2 has a free tier and no egress fees |
 | Python tooling | **uv** (project + lockfile), ruff | Fast, reproducible installs locally, in CI and on Render |
 | PDF / images | **PyMuPDF** (render pages, text and word boxes), Pillow, `openpyxl`, `python-docx`, `mail-parser` | Fast, gives word-level coordinates for highlighting |
 | OCR fallback (boxes only) | **docTR** or PaddleOCR (local) | Word boxes for scanned pages so evidence can be highlighted; the model still does the reading |
@@ -1071,11 +1071,11 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 ### Stage B: Read the documents
 
 **Phase 9: API, upload and storage**
-- FastAPI service, shipments and documents endpoints, upload to Cloudflare R2, Celery worker with Redis.
+- FastAPI service with JWT auth (dev tokens until the Phase 17 login), shipments and documents endpoints, multipart upload to S3-compatible storage (SeaweedFS locally, R2 when deployed). The Celery worker with Redis moves to Phase 10, where the first slow work (page rendering, OCR) starts (Decision.md D-25).
 - *Exit:* a bundle uploaded through the API is stored and listed.
 
 **Phase 10: Pre-processing and classification**
-- Page rendering, text layer and OCR word boxes, document splitting; classifier on the Decisions API with a Responses API fallback.
+- Celery worker with Redis (moved from Phase 9); page rendering, text layer and OCR word boxes, document splitting; classifier on the Decisions API with a Responses API fallback.
 - *Exit:* classification accuracy measured by the harness.
 
 **Phase 11: Extraction and evidence**

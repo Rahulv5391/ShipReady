@@ -16,5 +16,17 @@ services:
       interval: 2s
       retries: 15
 
+  # S3-compatible storage for uploaded files (Cloudflare R2 when deployed). The keys are in
+  # docker/seaweedfs-s3.json and are for local use only.
+  storage:
+    image: chrislusf/seaweedfs:4.50
+    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
+    ports:
+      - "8333:8333"
+    volumes:
+      - storagedata:/data
+      - ./docker/seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
+
 volumes:
   pgdata:
+  storagedata:
