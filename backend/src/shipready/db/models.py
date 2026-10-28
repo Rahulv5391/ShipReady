@@ -1,14 +1,27 @@
-"""Tables for the check catalogue and reference data (PLAN.md Section 12).
+"""Tables for the check catalogue, reference data, and organisations, shipments and documents
+(PLAN.md Section 12).
 
 The catalogue, UQC codes and countries are seeded from packaged files; the other reference tables
-are loaded from official downloads by `shipready.reference.load`.
+are loaded from official downloads by `shipready.db.load`. Organisations, shipments and documents
+are written by the API.
 """
 
-from datetime import date
+import uuid
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import CheckConstraint, ForeignKey, Numeric, SmallInteger, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -141,3 +154,59 @@ class RefLocation(Base):
     # 7 fixed transport, B border crossing; "-" where the function does not apply.
     functions: Mapped[str] = mapped_column(String(8))
     status: Mapped[str | None] = mapped_column(String(2))
+
+
+ORGANIZATION_TYPES = ("exporter", "cha", "forwarder", "internal")
+TRANSPORT_MODES = ("sea", "air", "road", "rail", "courier")
+# Later phases add the processing statuses (PLAN.md Section 12).
+SHIPMENT_STATUSES = ("RECEIVED",)
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+    __table_args__ = (CheckConstraint(_one_of("type", ORGANIZATION_TYPES), name="type_valid"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text)
+    type: Mapped[str] = mapped_column(String(16))
+
+
+class Shipment(Base):
+    __tablename__ = "shipments"
+    __table_args__ = (
+        UniqueConstraint("org_id", "reference", name="reference_unique"),
+        CheckConstraint(f"mode IS NULL OR {_one_of('mode', TRANSPORT_MODES)}", name="mode_valid"),
+        CheckConstraint(_one_of("status", SHIPMENT_STATUSES), name="status_valid"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    reference: Mapped[str] = mapped_column(Text)  # the exporter's job number
+    mode: Mapped[str | None] = mapped_column(String(8))
+    status: Mapped[str] = mapped_column(String(16), default="RECEIVED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Document(Base):
+    """An uploaded file; the bytes are in object storage under `storage_key`."""
+
+    __tablename__ = "documents"
+    __table_args__ = (
+        # The same file twice in one shipment is refused rather than stored twice.
+        UniqueConstraint("shipment_id", "sha256", name="file_unique_in_shipment"),
+        CheckConstraint("size_bytes > 0", name="size_positive"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"))
+    shipment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("shipments.id", ondelete="CASCADE"), index=True
+    )
+    filename: Mapped[str] = mapped_column(Text)
+    media_type: Mapped[str] = mapped_column(Text)  # detected from the file's bytes
+    size_bytes: Mapped[int]
+    sha256: Mapped[str] = mapped_column(String(64))
+    storage_key: Mapped[str] = mapped_column(Text, unique=True)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

@@ -30,7 +30,7 @@ from shipready.db.seed import seed
 from shipready.db.session import database_url
 from shipready.reference.fetch import FILES
 
-SEED_COUNTS = {"rules": 39, "ref_uqc": 45, "ref_countries": 249}
+SEED_COUNTS = {"rules": 39, "ref_uqc": 45, "ref_countries": 249, "organizations": 1}
 LOAD_COUNTS = {
     "ref_itc_hs": 31,
     "ref_export_policy": 11,  # 5 from DGFT's lists + 6 sugar override periods
