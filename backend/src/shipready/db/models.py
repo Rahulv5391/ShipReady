@@ -23,8 +23,9 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from shipready.documents.types import DOCUMENT_TYPES
 from shipready.reference.export_policy import EXPORT_POLICIES
 from shipready.reference.ports import KINDS
 from shipready.rules.catalogue import CHECK_TYPES, SEVERITIES
@@ -160,6 +161,11 @@ ORGANIZATION_TYPES = ("exporter", "cha", "forwarder", "internal")
 TRANSPORT_MODES = ("sea", "air", "road", "rail", "courier")
 # Later phases add the processing statuses (PLAN.md Section 12).
 SHIPMENT_STATUSES = ("RECEIVED",)
+DOCUMENT_STATUSES = ("uploaded", "processing", "processed", "failed")
+TEXT_SOURCES = ("pdf_text", "ocr", "cells")  # the PDF's own text, OCR of an image, Excel cells
+# How a part's type was decided: its title, following a titled page, the AI, or not at all
+# (no title and AI switched off; the part is "other").
+PART_DECISIONS = ("title", "follows", "ai", "none")
 
 
 class Organization(Base):
@@ -188,13 +194,15 @@ class Shipment(Base):
 
 
 class Document(Base):
-    """An uploaded file; the bytes are in object storage under `storage_key`."""
+    """An uploaded file; the bytes are in object storage under `storage_key`. The worker reads
+    its pages and splits it into parts (status uploaded -> processing -> processed or failed)."""
 
     __tablename__ = "documents"
     __table_args__ = (
         # The same file twice in one shipment is refused rather than stored twice.
         UniqueConstraint("shipment_id", "sha256", name="file_unique_in_shipment"),
         CheckConstraint("size_bytes > 0", name="size_positive"),
+        CheckConstraint(_one_of("status", DOCUMENT_STATUSES), name="status_valid"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -210,3 +218,52 @@ class Document(Base):
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    status: Mapped[str] = mapped_column(String(16), server_default="uploaded")
+    error: Mapped[str | None] = mapped_column(Text)  # why processing failed
+    page_count: Mapped[int | None]
+    parts: Mapped[list["DocumentPart"]] = relationship(
+        order_by="DocumentPart.first_page", lazy="selectin", passive_deletes=True
+    )
+
+
+class DocumentPage(Base):
+    """One page of an uploaded file: its rendered image and the words on it with their boxes."""
+
+    __tablename__ = "document_pages"
+    __table_args__ = (
+        CheckConstraint(_one_of("text_source", TEXT_SOURCES), name="text_source_valid"),
+    )
+
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    page_no: Mapped[int] = mapped_column(primary_key=True)  # from 1
+    image_key: Mapped[str | None] = mapped_column(Text)  # rendered image; none for a workbook
+    width_px: Mapped[int | None]
+    height_px: Mapped[int | None]
+    text_source: Mapped[str] = mapped_column(String(8))
+    text: Mapped[str] = mapped_column(Text)
+    # [{"t": word, "x0": .., "y0": .., "x1": .., "y1": ..}], coordinates 0..1 from the top left.
+    words: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+
+
+class DocumentPart(Base):
+    """Pages first_page..last_page of a file are one document of `doc_type`. A file holding
+    several documents (a combined scan) has several parts."""
+
+    __tablename__ = "document_parts"
+    __table_args__ = (
+        CheckConstraint(_one_of("doc_type", DOCUMENT_TYPES), name="doc_type_valid"),
+        CheckConstraint(_one_of("decided_by", PART_DECISIONS), name="decided_by_valid"),
+        CheckConstraint("first_page >= 1 AND last_page >= first_page", name="pages_valid"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    first_page: Mapped[int]
+    last_page: Mapped[int]
+    doc_type: Mapped[str] = mapped_column(String(32))
+    decided_by: Mapped[str] = mapped_column(String(8))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))  # the AI's, when it decided
