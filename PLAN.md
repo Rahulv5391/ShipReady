@@ -1079,7 +1079,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - *Exit:* classification accuracy measured by the harness.
 
 **Phase 11: Extraction and evidence**
-- Pydantic schemas per document type with evidence; extraction with Structured Outputs; normalisation of extracted values; evidence locator (quote → box).
+- Pydantic schemas per document type with evidence; extraction with Structured Outputs; normalisation of extracted values; evidence locator (quote → box). Built with one request per shipment on Gemini's free tier until the OpenAI key arrives (Decision.md D-28).
 - *Exit:* field extraction ≥ 90% on the synthetic validation split; evidence boxes working.
 
 **Phase 12: Re-reader and model benchmark**

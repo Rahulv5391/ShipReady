@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from shipready.api import auth, documents, token, uploads
 from shipready.api.app import create_app
 from shipready.api.deps import get_enqueue, get_session, get_storage
-from shipready.db.models import Document, Organization, Shipment
+from shipready.db.models import Document, DocumentPart, ExtractedField, Organization, Shipment
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
 from shipready.storage import Storage, settings_from_env
 
@@ -398,3 +398,89 @@ def test_app_refuses_to_start_without_a_secret(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv(auth.SECRET_VARIABLE, raising=False)
     with pytest.raises(RuntimeError, match="SHIPREADY_JWT_SECRET"), TestClient(create_app()):
         pass
+
+
+# --- extracted fields ---
+
+
+def extracted(session: Session, shipment_id: str) -> uuid.UUID:
+    """The shipment's one uploaded file read as an invoice with one field, as the worker does."""
+    document = session.scalars(select(Document)).one()
+    part = DocumentPart(
+        document_id=document.id,
+        first_page=1,
+        last_page=1,
+        doc_type="commercial_invoice",
+        decided_by="title",
+    )
+    session.add(part)
+    session.flush()
+    session.add_all(
+        [
+            ExtractedField(
+                shipment_id=uuid.UUID(shipment_id),
+                part_id=part.id,
+                path="commercial_invoice.invoice_number",
+                value="EXP/1",
+                quote="EXP/1",
+                page_no=1,
+                box={"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.25},
+                model="test-model",
+            ),
+            ExtractedField(
+                shipment_id=uuid.UUID(shipment_id),
+                part_id=part.id,
+                path="commercial_invoice.iec",
+                value="0123456789",
+                quote="0123 456 789",
+                page_no=1,
+                box=None,
+                model="test-model",
+            ),
+        ]
+    )
+    session.get_one(Shipment, uuid.UUID(shipment_id)).status = "EXTRACTED"
+    session.commit()
+    return document.id
+
+
+def test_fields_are_listed_with_their_evidence(client: TestClient, session: Session) -> None:
+    shipment_id = new_shipment(client)
+    assert client.get(f"/api/v1/shipments/{shipment_id}/fields", headers=headers()).json() == []
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    document_id = extracted(session, shipment_id)
+
+    fields = client.get(f"/api/v1/shipments/{shipment_id}/fields", headers=headers()).json()
+    assert [f["path"] for f in fields] == [
+        "commercial_invoice.iec",
+        "commercial_invoice.invoice_number",
+    ]
+    assert fields[1] == {
+        "path": "commercial_invoice.invoice_number",
+        "value": "EXP/1",
+        "quote": "EXP/1",
+        "document_id": str(document_id),
+        "page_no": 1,
+        "box": {"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.25},
+        "model": "test-model",
+    }
+    assert fields[0]["box"] is None
+    detail = client.get(f"/api/v1/shipments/{shipment_id}", headers=headers()).json()
+    assert (detail["status"], detail["error"]) == ("EXTRACTED", None)
+
+
+def test_another_organisations_fields_are_not_found(client: TestClient) -> None:
+    shipment_id = new_shipment(client)
+    response = client.get(f"/api/v1/shipments/{shipment_id}/fields", headers=headers(OTHER_ORG_ID))
+    assert response.status_code == 404
+
+
+def test_new_files_make_an_extracted_shipment_wait_again(
+    client: TestClient, session: Session
+) -> None:
+    shipment_id = new_shipment(client)
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    extracted(session, shipment_id)
+    assert upload(client, shipment_id, ("bl.png", PNG)).status_code == 201
+    detail = client.get(f"/api/v1/shipments/{shipment_id}", headers=headers()).json()
+    assert detail["status"] == "RECEIVED"

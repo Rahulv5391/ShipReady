@@ -1,10 +1,12 @@
-"""The background worker: reads each uploaded file's pages and splits it into documents.
+"""The background worker: reads each uploaded file's pages and splits it into documents, then,
+once every file of a shipment is read, reads the shipment's fields with their evidence.
 
     uv run --env-file .env celery -A shipready.worker worker --pool=solo --loglevel=info
     uv run --env-file .env python -m shipready.worker requeue    # queue files still "uploaded"
 
-The API queues `process_document` after an upload. A run replaces the file's pages and parts, so
-running it again (a retry, a requeue) is safe.
+The API queues `process_document` after an upload; that queues `extract_shipment` when it read
+the shipment's last waiting file. Each run replaces what an earlier run wrote, so running a task
+again (a retry, a requeue) is safe.
 """
 
 import argparse
@@ -20,11 +22,18 @@ from celery import Celery
 from sqlalchemy import Engine, delete, select
 from sqlalchemy.orm import Session
 
-from shipready.ai import PageClassifier, RateLimited, ai_mode, classifier_from_env
+from shipready.ai import (
+    PageClassifier,
+    RateLimited,
+    ai_mode,
+    classifier_from_env,
+    extractor_from_env,
+)
 from shipready.classify import split_into_parts
-from shipready.db.models import Document, DocumentPage, DocumentPart
+from shipready.db.models import Document, DocumentPage, DocumentPart, ExtractedField, Shipment
 from shipready.db.session import make_engine
-from shipready.pages import Page, read_pages
+from shipready.extract import DocumentText, FieldExtractor, extract_fields
+from shipready.pages import Page, Word, read_pages, text_source
 from shipready.storage import Storage, make_storage, settings_from_env
 
 logger = logging.getLogger(__name__)
@@ -48,20 +57,32 @@ app.conf.update(
 @app.task(name="shipready.worker.process_document", bind=True, max_retries=8)  # type: ignore[untyped-decorator]
 def process_document(self: Any, document_id: str) -> None:
     try:
-        process(_engine(), _storage(), _classifier(), uuid.UUID(document_id))
+        ready = process(_engine(), _storage(), _classifier(), uuid.UUID(document_id))
     except RateLimited as error:
         # The AI quota resets with time; the file waits rather than fails.
+        raise self.retry(countdown=error.retry_after) from error
+    if ready is not None:
+        extract_shipment.delay(str(ready))
+
+
+@app.task(name="shipready.worker.extract_shipment", bind=True, max_retries=8)  # type: ignore[untyped-decorator]
+def extract_shipment(self: Any, shipment_id: str) -> None:
+    try:
+        extract(_engine(), _extractor(), uuid.UUID(shipment_id))
+    except RateLimited as error:
         raise self.retry(countdown=error.retry_after) from error
 
 
 def process(
     engine: Engine, storage: Storage, ai: PageClassifier | None, document_id: uuid.UUID
-) -> None:
+) -> uuid.UUID | None:
+    """Read the file's pages and split it into parts. Returns its shipment's ID when every file
+    of the shipment has now been read, so the shipment is ready for extraction."""
     with Session(engine) as session:
         document = session.get(Document, document_id)
         if document is None:
             logger.warning("document %s no longer exists", document_id)
-            return
+            return None
         document.status, document.error = "processing", None
         session.commit()
         try:
@@ -74,6 +95,7 @@ def process(
             session.add_all(DocumentPart(document_id=document.id, **asdict(part)) for part in parts)
             document.page_count, document.status = len(pages), "processed"
             session.commit()
+            return document.shipment_id if _all_read(session, document.shipment_id) else None
         except RateLimited:
             session.rollback()
             document.status = "uploaded"
@@ -86,6 +108,81 @@ def process(
             session.commit()
             logger.exception("processing document %s failed", document_id)
             raise
+
+
+def _all_read(session: Session, shipment_id: uuid.UUID) -> bool:
+    statuses = session.scalars(select(Document.status).where(Document.shipment_id == shipment_id))
+    return all(status == "processed" for status in statuses)
+
+
+def extract(engine: Engine, extractor: FieldExtractor, shipment_id: uuid.UUID) -> None:
+    """Read every field of the shipment's documents in one request and store each with its
+    evidence, replacing the fields of an earlier run."""
+    with Session(engine) as session:
+        shipment = session.get(Shipment, shipment_id)
+        if shipment is None:
+            logger.warning("shipment %s no longer exists", shipment_id)
+            return
+        try:
+            documents, parts = _documents_of(session, shipment_id)
+            fields = extract_fields(documents, extractor)
+            session.execute(delete(ExtractedField).where(ExtractedField.shipment_id == shipment_id))
+            session.add_all(
+                ExtractedField(
+                    shipment_id=shipment_id,
+                    part_id=parts[field.part].id,
+                    path=field.path,
+                    value=field.value,
+                    quote=field.quote,
+                    page_no=field.page,
+                    box=asdict(field.box) if field.box else None,
+                    model=extractor.model,
+                )
+                for field in fields
+            )
+            shipment.status, shipment.error = "EXTRACTED", None
+            session.commit()
+        except RateLimited:
+            session.rollback()
+            raise
+        except Exception as error:
+            session.rollback()
+            shipment.error = f"{type(error).__name__}: {error}"[:MAX_ERROR_CHARS]
+            session.commit()
+            logger.exception("extracting shipment %s failed", shipment_id)
+            raise
+
+
+def _documents_of(
+    session: Session, shipment_id: uuid.UUID
+) -> tuple[list[DocumentText], dict[int, DocumentPart]]:
+    """The shipment's documents of a known type, numbered from 1 in upload order, and the part
+    each number stands for. Pages are numbered as in their file."""
+    documents: list[DocumentText] = []
+    parts: dict[int, DocumentPart] = {}
+    files = session.scalars(
+        select(Document).where(Document.shipment_id == shipment_id).order_by(Document.uploaded_at)
+    )
+    for document in files:
+        pages = {
+            row.page_no: _page_of(row)
+            for row in session.scalars(
+                select(DocumentPage).where(DocumentPage.document_id == document.id)
+            )
+        }
+        for part in document.parts:
+            if part.doc_type == "other":
+                continue
+            number = len(documents) + 1
+            span = tuple(pages[n] for n in range(part.first_page, part.last_page + 1))
+            documents.append(DocumentText(number, part.doc_type, document.filename, span))
+            parts[number] = part
+    return documents, parts
+
+
+def _page_of(row: DocumentPage) -> Page:
+    words = tuple(Word(w["t"], w["x0"], w["y0"], w["x1"], w["y1"]) for w in row.words)
+    return Page(row.page_no, row.text, words, text_source(row.text_source), None)
 
 
 def _page_row(storage: Storage, document: Document, page: Page) -> DocumentPage:
@@ -123,6 +220,11 @@ def _storage() -> Storage:
 @cache
 def _classifier() -> PageClassifier | None:
     return classifier_from_env()
+
+
+@cache
+def _extractor() -> FieldExtractor:
+    return extractor_from_env()
 
 
 def requeue(engine: Engine) -> int:

@@ -24,7 +24,29 @@ class ShipmentOut(BaseModel):
     reference: str
     mode: str | None
     status: str
+    error: str | None
     created_at: datetime
+
+
+class BoxOut(BaseModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+class FieldOut(BaseModel):
+    """A field read from a document, with the text it was read from and where that is."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    path: str
+    value: str
+    quote: str
+    document_id: uuid.UUID
+    page_no: int
+    box: BoxOut | None
+    model: str
 
 
 class DocumentPartOut(BaseModel):

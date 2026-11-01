@@ -159,8 +159,8 @@ class RefLocation(Base):
 
 ORGANIZATION_TYPES = ("exporter", "cha", "forwarder", "internal")
 TRANSPORT_MODES = ("sea", "air", "road", "rail", "courier")
-# Later phases add the processing statuses (PLAN.md Section 12).
-SHIPMENT_STATUSES = ("RECEIVED",)
+# Later phases add the remaining statuses of PLAN.md Section 10.2 (checked, verified, ...).
+SHIPMENT_STATUSES = ("RECEIVED", "EXTRACTED")
 DOCUMENT_STATUSES = ("uploaded", "processing", "processed", "failed")
 TEXT_SOURCES = ("pdf_text", "ocr", "cells")  # the PDF's own text, OCR of an image, Excel cells
 # How a part's type was decided: its title, following a titled page, the AI, or not at all
@@ -190,6 +190,7 @@ class Shipment(Base):
     reference: Mapped[str] = mapped_column(Text)  # the exporter's job number
     mode: Mapped[str | None] = mapped_column(String(8))
     status: Mapped[str] = mapped_column(String(16), default="RECEIVED")
+    error: Mapped[str | None] = mapped_column(Text)  # why extraction failed, if it did
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -267,3 +268,28 @@ class DocumentPart(Base):
     doc_type: Mapped[str] = mapped_column(String(32))
     decided_by: Mapped[str] = mapped_column(String(8))
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))  # the AI's, when it decided
+
+
+class ExtractedField(Base):
+    """A value read from one of the shipment's documents, with the text it was read from and
+    where that text is: the evidence a finding points to. A shipment's fields are replaced each
+    time it is extracted."""
+
+    __tablename__ = "extracted_fields"
+    __table_args__ = (UniqueConstraint("shipment_id", "path", name="path_unique"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    shipment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("shipments.id", ondelete="CASCADE"), index=True
+    )
+    part_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("document_parts.id", ondelete="CASCADE"), index=True
+    )
+    path: Mapped[str] = mapped_column(Text)  # e.g. "commercial_invoice.lines[0].quantity"
+    value: Mapped[str] = mapped_column(Text)  # as the model wrote it, in the guide's format
+    quote: Mapped[str] = mapped_column(Text)  # the text as printed
+    page_no: Mapped[int]  # page of the file, from 1
+    # {"x0": .., "y0": .., "x1": .., "y1": ..}, 0..1 from the top left; None when the quote
+    # was not found on the page.
+    box: Mapped[dict[str, float] | None] = mapped_column(JSONB)
+    model: Mapped[str] = mapped_column(Text)

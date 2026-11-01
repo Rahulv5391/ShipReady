@@ -87,6 +87,8 @@ def upload_documents(
             storage.put(document.storage_key, data, document.media_type)
             stored.append(document.storage_key)
         session.add_all(document for document, _ in documents)
+        # New files make earlier fields incomplete; extraction runs again once they are read.
+        shipment.status = "RECEIVED"
         session.commit()
     except Exception as error:
         session.rollback()

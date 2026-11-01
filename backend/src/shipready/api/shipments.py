@@ -9,8 +9,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from shipready.api.deps import PrincipalDep, SessionDep
-from shipready.api.schemas import DocumentOut, ShipmentCreate, ShipmentDetail, ShipmentOut
-from shipready.db.models import Document, Shipment
+from shipready.api.schemas import (
+    BoxOut,
+    DocumentOut,
+    FieldOut,
+    ShipmentCreate,
+    ShipmentDetail,
+    ShipmentOut,
+)
+from shipready.db.models import Document, DocumentPart, ExtractedField, Shipment
 
 router = APIRouter(prefix="/shipments", tags=["shipments"])
 
@@ -60,6 +67,33 @@ def get_shipment(
         **ShipmentOut.model_validate(shipment).model_dump(),
         documents=[DocumentOut.model_validate(d) for d in documents],
     )
+
+
+@router.get("/{shipment_id}/fields")
+def list_fields(
+    shipment_id: uuid.UUID, principal: PrincipalDep, session: SessionDep
+) -> list[FieldOut]:
+    """The fields read from the shipment's documents, each with its evidence: empty until the
+    shipment is extracted."""
+    shipment = shipment_of(session, principal.org_id, shipment_id)
+    rows = session.execute(
+        select(ExtractedField, DocumentPart.document_id)
+        .join(DocumentPart, ExtractedField.part_id == DocumentPart.id)
+        .where(ExtractedField.shipment_id == shipment.id)
+        .order_by(ExtractedField.path)
+    )
+    return [
+        FieldOut(
+            path=field.path,
+            value=field.value,
+            quote=field.quote,
+            document_id=document_id,
+            page_no=field.page_no,
+            box=BoxOut.model_validate(field.box) if field.box else None,
+            model=field.model,
+        )
+        for field, document_id in rows
+    ]
 
 
 def shipment_of(session: Session, org_id: uuid.UUID, shipment_id: uuid.UUID) -> Shipment:

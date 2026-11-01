@@ -14,8 +14,16 @@ from shipgen.generator import generate_shipment
 from shipgen.render.sheets import render_pdf
 from shipready import worker
 from shipready.ai import AiAnswer, RateLimited
-from shipready.db.models import Document, DocumentPage, DocumentPart, Organization, Shipment
+from shipready.db.models import (
+    Document,
+    DocumentPage,
+    DocumentPart,
+    ExtractedField,
+    Organization,
+    Shipment,
+)
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
+from shipready.extract import DocumentText, RawField
 from shipready.storage import Storage
 
 BUCKET = "shipready-test"
@@ -176,3 +184,110 @@ def test_task_name_does_not_depend_on_how_the_module_is_loaded() -> None:
     # task it queues must still be the one the worker knows.
     loaded_elsewhere = runpy.run_module("shipready.worker", run_name="loaded_elsewhere")
     assert loaded_elsewhere["process_document"].name == worker.process_document.name
+
+
+class FakeExtractor:
+    """Reads the invoice number off the first document, quoting it as printed."""
+
+    model = "fake-model"
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[list[DocumentText]] = []
+
+    def extract(self, documents: list[DocumentText], guide: str) -> list[RawField]:
+        self.calls.append(documents)
+        if self.error is not None:
+            raise self.error
+        number = build_documents(generate_shipment(11, 0)).commercial_invoice.invoice_number
+        return [
+            RawField(1, "invoice_number", number, number, 1),
+            RawField(1, "iec", "0000000000", "not on the page", 1),
+        ]
+
+
+def processed_shipment(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> uuid.UUID:
+    monkeypatch.setenv("CLASSIFY_WITH_AI", "never")
+    document_id = stored_document(session, storage, bundle_pdf(), "application/pdf")
+    ready = worker.process(engine_of, storage, None, document_id)
+    assert ready is not None
+    return ready
+
+
+def test_last_file_read_makes_the_shipment_ready(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
+    waiting = Document(
+        org_id=DEMO_ORG_ID,
+        shipment_id=shipment_id,
+        filename="later.pdf",
+        media_type="application/pdf",
+        size_bytes=1,
+        sha256="1" * 64,
+        storage_key="orgs/x/later.pdf",
+    )
+    session.add(waiting)
+    session.commit()
+    first = session.scalars(select(Document.id).where(Document.filename == "file")).one()
+    # With a file still waiting, reading the other again does not make the shipment ready.
+    assert worker.process(engine_of, storage, None, first) is None
+
+
+def test_extraction_stores_fields_with_evidence(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
+    extractor = FakeExtractor()
+    worker.extract(engine_of, extractor, shipment_id)
+    worker.extract(engine_of, extractor, shipment_id)  # replaces
+
+    (documents,) = {tuple(d.doc_type for d in call) for call in extractor.calls}
+    assert documents[:2] == ("commercial_invoice", "packing_list")
+    assert extractor.calls[0][0].pages[0].words  # words read back from the database
+    session.expire_all()
+    shipment = session.get(Shipment, shipment_id)
+    assert shipment is not None and (shipment.status, shipment.error) == ("EXTRACTED", None)
+    fields = {f.path: f for f in session.scalars(select(ExtractedField))}
+    assert set(fields) == {"commercial_invoice.invoice_number", "commercial_invoice.iec"}
+    number = fields["commercial_invoice.invoice_number"]
+    assert number.box is not None and 0 <= number.box["x0"] < number.box["x1"] <= 1
+    assert (number.page_no, number.model) == (1, "fake-model")
+    assert fields["commercial_invoice.iec"].box is None
+
+
+def test_failed_extraction_is_recorded(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
+    with pytest.raises(ValueError, match="unexpected AI answer"):
+        worker.extract(engine_of, FakeExtractor(ValueError("unexpected AI answer")), shipment_id)
+    session.expire_all()
+    shipment = session.get(Shipment, shipment_id)
+    assert shipment is not None and shipment.status == "RECEIVED"
+    assert shipment.error == "ValueError: unexpected AI answer"
+
+
+def test_rate_limited_extraction_waits(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
+    with pytest.raises(RateLimited):
+        worker.extract(engine_of, FakeExtractor(RateLimited(5)), shipment_id)
+    session.expire_all()
+    shipment = session.get(Shipment, shipment_id)
+    assert shipment is not None and (shipment.status, shipment.error) == ("RECEIVED", None)
+
+
+def test_reading_the_last_file_queues_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    shipment_id = uuid.uuid4()
+    queued: list[str] = []
+    monkeypatch.setattr(worker, "process", lambda *args: shipment_id)
+    monkeypatch.setattr(worker, "_engine", lambda: None)
+    monkeypatch.setattr(worker, "_storage", lambda: None)
+    monkeypatch.setattr(worker, "_classifier", lambda: None)
+    monkeypatch.setattr(worker.extract_shipment, "delay", queued.append)
+    worker.process_document.run(str(uuid.uuid4()))
+    assert queued == [str(shipment_id)]
