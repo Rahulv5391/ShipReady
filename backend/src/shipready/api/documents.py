@@ -7,10 +7,11 @@ from typing import Annotated
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from kombu.exceptions import OperationalError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from shipready.api.deps import PrincipalDep, SessionDep, StorageDep
+from shipready.api.deps import EnqueueDep, PrincipalDep, SessionDep, StorageDep
 from shipready.api.schemas import DocumentOut
 from shipready.api.shipments import shipment_of
 from shipready.api.uploads import (
@@ -34,8 +35,10 @@ def upload_documents(
     principal: PrincipalDep,
     session: SessionDep,
     storage: StorageDep,
+    enqueue: EnqueueDep,
 ) -> list[DocumentOut]:
-    """Store every file, or none: a bad file rejects the whole upload."""
+    """Store every file, or none: a bad file rejects the whole upload. Stored files are then
+    queued for the worker, which reads their pages and splits them into documents."""
     shipment = shipment_of(session, principal.org_id, shipment_id)
     if len(files) > MAX_FILES_PER_UPLOAD:
         raise HTTPException(
@@ -98,6 +101,16 @@ def upload_documents(
                 status.HTTP_503_SERVICE_UNAVAILABLE, "file storage is unavailable; try again"
             ) from None
         raise
+    for document, _ in documents:
+        try:
+            enqueue(document.id)
+        except OperationalError as error:
+            # The file is safely stored; it waits as "uploaded" until the queue is back.
+            logger.error(
+                "could not queue document %s (%s); run `python -m shipready.worker requeue`",
+                document.id,
+                error,
+            )
     return [DocumentOut.model_validate(document) for document, _ in documents]
 
 

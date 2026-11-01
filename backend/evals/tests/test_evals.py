@@ -180,3 +180,12 @@ def test_cli_gate_fails_on_regression(dataset: Path, tmp_path: Path) -> None:
 def test_cli_rejects_a_missing_dataset(tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
         main(["--pipeline", "empty", "--split", "dev", "--dataset", str(tmp_path)])
+
+
+def test_misclassified_files_are_listed(dataset: Path, tmp_path: Path) -> None:
+    case = load_cases(dataset, "dev")[0]
+    first, *rest = case.files
+    files = {path: case.files[path] for path in rest} | {first: ("other",)}
+    result = score_case(case, Prediction(files=files), 0.0)
+    assert result.misclassified == ((first, case.files[first], ("other",)),)
+    assert result.files_correct == len(case.files) - 1

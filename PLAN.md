@@ -287,14 +287,14 @@ Key Value on Render (Singapore region, closest to India) · documents in Cloudfl
 | Language (backend/AI) | **Python 3.12** | Best OpenAI SDK and Agents SDK support; document tooling |
 | API | **FastAPI** + Pydantic v2 | Typed schemas shared with Structured Outputs; async |
 | Agent framework | **OpenAI Agents SDK (`openai-agents`, pinned, currently 0.24.x)** | Official orchestration: agents-as-tools, guardrails, `needs_approval` human-in-the-loop, sessions, tracing. Self-hosted orchestration so we keep data control (see ADR-1) |
-| LLM API | **OpenAI Responses API** (+ Decisions API, Files, Vector Stores) | Required for built-in tools and current models; Assistants API is shut down |
+| LLM API | **OpenAI Responses API** (+ Decisions API, Files, Vector Stores) once the company's key arrives; until then **Gemini free tier** behind a provider-neutral layer, synthetic data only (Decision.md D-26) | Required for built-in tools and current models; Assistants API is shut down |
 | Task queue | **Celery + Render Key Value** (Redis-compatible; Redis locally) | Long-running multi-document runs, retries, concurrency limits |
 | Database | **Render Postgres 16 + pgvector** | Relational core + JSONB for extracted payloads + vectors for product master similarity |
 | ORM / migrations | SQLAlchemy 2.0 + Alembic | Standard |
 | Object storage | **Cloudflare R2** (S3 API via boto3); SeaweedFS in Docker locally (MinIO's images are no longer public; Decision.md D-25) | Render has no object storage; R2 has a free tier and no egress fees |
 | Python tooling | **uv** (project + lockfile), ruff | Fast, reproducible installs locally, in CI and on Render |
-| PDF / images | **PyMuPDF** (render pages, text and word boxes), Pillow, `openpyxl`, `python-docx`, `mail-parser` | Fast, gives word-level coordinates for highlighting |
-| OCR fallback (boxes only) | **docTR** or PaddleOCR (local) | Word boxes for scanned pages so evidence can be highlighted; the model still does the reading |
+| PDF / images | **pypdfium2** (render pages, text and character boxes), Pillow, `openpyxl`, `python-docx`, `mail-parser`; PyMuPDF dropped for its AGPL licence (Decision.md D-27) | Gives word-level coordinates for highlighting; permissive licences |
+| OCR fallback (boxes only) | **RapidOCR** (PaddleOCR models on onnxruntime, Apache-2.0, pip only) | Word boxes for scanned pages so evidence can be highlighted |
 | Report PDF | WeasyPrint + Jinja2 | HTML templates to PDF |
 | Frontend | **Next.js 15 (App Router) + TypeScript + Tailwind + shadcn/ui** | Fast to build a polished UI |
 | PDF viewer | `react-pdf` (pdf.js) with an overlay layer for boxes | Click a finding to jump to the highlighted spot |
@@ -1075,7 +1075,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - *Exit:* a bundle uploaded through the API is stored and listed.
 
 **Phase 10: Pre-processing and classification**
-- Celery worker with Redis (moved from Phase 9); page rendering, text layer and OCR word boxes, document splitting; classifier on the Decisions API with a Responses API fallback.
+- Celery worker with Redis (moved from Phase 9); page rendering, text layer and OCR word boxes, document splitting; classifier: title rules first, an AI model for what they cannot decide (`CLASSIFY_WITH_AI`), Gemini free tier until the OpenAI key arrives (Decision.md D-26, D-27).
 - *Exit:* classification accuracy measured by the harness.
 
 **Phase 11: Extraction and evidence**

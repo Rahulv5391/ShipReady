@@ -39,6 +39,8 @@ class CaseResult:
     reported: frozenset[str]
     files_correct: int
     files_total: int
+    # Files the pipeline typed wrongly: (path, expected types, predicted types).
+    misclassified: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...]
     fields: tuple[tuple[str, Medium, bool], ...]  # (field name, medium, extracted correctly)
     lines_matched: int
     lines_reported: int
@@ -60,6 +62,11 @@ def score_case(case: EvalCase, prediction: Prediction, latency_s: float) -> Case
         )
         for path, truth in case.fields.items()
     )
+    wrong = tuple(
+        (path, documents, prediction.files.get(path, ()))
+        for path, documents in case.files.items()
+        if prediction.files.get(path) != documents
+    )
     expected_lines, reported_lines = (
         _lines(case.fields, case.fields),
         _lines(prediction.fields, case.fields),
@@ -68,10 +75,9 @@ def score_case(case: EvalCase, prediction: Prediction, latency_s: float) -> Case
         shipment_id=case.shipment_id,
         expected=case.findings,
         reported=prediction.findings,
-        files_correct=sum(
-            1 for path, documents in case.files.items() if prediction.files.get(path) == documents
-        ),
+        files_correct=len(case.files) - len(wrong),
         files_total=len(case.files),
+        misclassified=wrong,
         fields=fields,
         lines_matched=sum((expected_lines & reported_lines).values()),
         lines_reported=sum(reported_lines.values()),

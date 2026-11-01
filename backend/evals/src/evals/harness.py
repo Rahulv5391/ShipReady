@@ -76,6 +76,12 @@ def write_report(result: Run, out: Path) -> Path:
                 "reported": sorted(r.reported),
                 "missed": sorted(r.expected - r.reported),
                 "false_alarms": sorted(r.reported - r.expected),
+                # Files the pipeline typed, but wrongly (an untyped file is only counted).
+                "misclassified": [
+                    {"file": path, "expected": list(expected), "predicted": list(predicted)}
+                    for path, expected, predicted in r.misclassified
+                    if predicted
+                ],
                 "latency_s": round(r.latency_s, 3),
                 "cost_usd": str(r.cost_usd),
             }

@@ -10,13 +10,14 @@ import jwt
 import pytest
 from botocore.exceptions import EndpointConnectionError
 from fastapi.testclient import TestClient
+from kombu.exceptions import OperationalError
 from moto import mock_aws
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from shipready.api import auth, documents, token, uploads
 from shipready.api.app import create_app
-from shipready.api.deps import get_session, get_storage
+from shipready.api.deps import get_enqueue, get_session, get_storage
 from shipready.db.models import Document, Organization, Shipment
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
 from shipready.storage import Storage, settings_from_env
@@ -44,8 +45,14 @@ def storage() -> Iterator[Storage]:
 
 
 @pytest.fixture
+def queued() -> list[uuid.UUID]:
+    """Documents the API handed to the worker queue (a list instead of Redis)."""
+    return []
+
+
+@pytest.fixture
 def client(
-    session: Session, storage: Storage, monkeypatch: pytest.MonkeyPatch
+    session: Session, storage: Storage, queued: list[uuid.UUID], monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[TestClient]:
     monkeypatch.setenv(auth.SECRET_VARIABLE, SECRET)
     session.add_all(
@@ -58,6 +65,7 @@ def client(
     app = create_app()
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_enqueue] = lambda: queued.append
     yield TestClient(app)
 
 
@@ -213,6 +221,31 @@ def test_upload_stores_files_and_lists_them(
         assert document.storage_key.startswith(f"orgs/{DEMO_ORG_ID}/shipments/{shipment_id}/")
     one = client.get(f"/api/v1/documents/{uploaded[0]['id']}", headers=headers()).json()
     assert one == uploaded[0]
+
+
+def test_stored_files_are_queued_for_the_worker(
+    client: TestClient, queued: list[uuid.UUID]
+) -> None:
+    shipment_id = new_shipment(client)
+    uploaded = upload(client, shipment_id, ("invoice.pdf", PDF), ("bl.png", PNG)).json()
+    assert queued == [uuid.UUID(d["id"]) for d in uploaded]
+    assert [(d["status"], d["parts"], d["page_count"]) for d in uploaded] == [
+        ("uploaded", [], None),
+        ("uploaded", [], None),
+    ]
+
+
+def test_upload_succeeds_when_the_queue_is_down(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    def broken_queue(document_id: uuid.UUID) -> None:
+        raise OperationalError("Error 10061 connecting to localhost:6379")
+
+    client.app.dependency_overrides[get_enqueue] = lambda: broken_queue  # type: ignore[attr-defined]
+    response = upload(client, new_shipment(client), ("invoice.pdf", PDF))
+    assert response.status_code == 201
+    assert response.json()[0]["status"] == "uploaded"
+    assert "python -m shipready.worker requeue" in caplog.text
 
 
 def test_type_comes_from_the_bytes_not_the_name(
