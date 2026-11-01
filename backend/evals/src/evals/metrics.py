@@ -20,6 +20,7 @@ TARGETS: dict[str, tuple[str, float]] = {
     "field_accuracy_digital": (">=", 0.95),
     "field_accuracy_image": (">=", 0.90),
     "line_item_f1": (">=", 0.92),
+    "evidence_accuracy": (">=", 0.90),
     "finding_recall": (">=", 0.95),
     "blocker_recall": (">=", 0.98),
     "finding_precision": (">=", 0.90),
@@ -42,6 +43,7 @@ class CaseResult:
     # Files the pipeline typed wrongly: (path, expected types, predicted types).
     misclassified: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...]
     fields: tuple[tuple[str, Medium, bool], ...]  # (field name, medium, extracted correctly)
+    located: int  # correctly extracted fields whose evidence box was found
     lines_matched: int
     lines_reported: int
     lines_expected: int
@@ -54,13 +56,14 @@ class CaseResult:
 
 
 def score_case(case: EvalCase, prediction: Prediction, latency_s: float) -> CaseResult:
-    fields = tuple(
-        (
-            _INDEX.sub("[]", path),
-            case.media[path.split(".")[0]],
-            path in prediction.fields and _same(prediction.fields[path], truth),
-        )
+    correct = {
+        path
         for path, truth in case.fields.items()
+        if path in prediction.fields and _same(prediction.fields[path], truth)
+    }
+    fields = tuple(
+        (_INDEX.sub("[]", path), case.media[path.split(".")[0]], path in correct)
+        for path in case.fields
     )
     wrong = tuple(
         (path, documents, prediction.files.get(path, ()))
@@ -79,6 +82,7 @@ def score_case(case: EvalCase, prediction: Prediction, latency_s: float) -> Case
         files_total=len(case.files),
         misclassified=wrong,
         fields=fields,
+        located=len(correct & prediction.located),
         lines_matched=sum((expected_lines & reported_lines).values()),
         lines_reported=sum(reported_lines.values()),
         lines_expected=sum(expected_lines.values()),
@@ -108,6 +112,11 @@ def summarise(results: list[CaseResult]) -> dict[str, float | None]:
         "line_item_f1": _f1(
             _ratio(matched, sum(r.lines_reported for r in results)),
             _ratio(matched, sum(r.lines_expected for r in results)),
+        ),
+        # Of the fields read correctly, the share whose quote was found on the page.
+        "evidence_accuracy": _ratio(
+            sum(r.located for r in results),
+            sum(hit for r in results for _, _, hit in r.fields),
         ),
         "finding_recall": _ratio(found, expected),
         "blocker_recall": _ratio(blockers_found, blockers_expected),

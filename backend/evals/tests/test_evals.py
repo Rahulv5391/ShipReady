@@ -6,13 +6,18 @@ from pathlib import Path
 
 import pytest
 
+from evals import page_cache, pipeline
 from evals.__main__ import main
+from evals.answer_cache import CachedExtractor
 from evals.cases import flatten, load_cases
 from evals.harness import baseline_of, regressions, run, write_report
 from evals.metrics import _f1, _normal, _percentile, meets, score_case, summarise
 from evals.pipeline import EmptyPipeline, Prediction
 from shipgen.dataset import Case, write_dataset
 from shipgen.mutations import missing_documents
+from shipready.ai import RateLimited
+from shipready.extract import DocumentText, RawField
+from shipready.pages import Page
 
 
 @pytest.fixture(scope="module")
@@ -189,3 +194,75 @@ def test_misclassified_files_are_listed(dataset: Path, tmp_path: Path) -> None:
     result = score_case(case, Prediction(files=files), 0.0)
     assert result.misclassified == ((first, case.files[first], ("other",)),)
     assert result.files_correct == len(case.files) - 1
+
+
+def test_page_cache_returns_the_same_pages(dataset: Path, tmp_path: Path) -> None:
+    case = load_cases(dataset, "dev")[0]
+    path = next(p for p, _ in case.files.items() if p.endswith(".pdf"))
+    data = (case.folder / path).read_bytes()
+    first = page_cache.cached_pages(data, "application/pdf", tmp_path)
+    (stored,) = tmp_path.iterdir()
+    assert stored.name.endswith(f"-{page_cache.reader_fingerprint()}.json")
+    again = page_cache.cached_pages(data, "application/pdf", tmp_path)
+    assert again == first
+    assert all(page.image is None for page in again)
+
+
+def test_page_cache_reads_afresh_when_the_reader_changes(
+    dataset: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = load_cases(dataset, "dev")[0]
+    path = next(p for p, _ in case.files.items() if p.endswith(".pdf"))
+    data = (case.folder / path).read_bytes()
+    page_cache.cached_pages(data, "application/pdf", tmp_path)
+    monkeypatch.setattr(page_cache, "reader_fingerprint", lambda: "changed-reader")
+    page_cache.cached_pages(data, "application/pdf", tmp_path)
+    assert len(list(tmp_path.glob("*.json"))) == 2
+
+
+class CountingExtractor:
+    model = "test-model"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def extract(self, documents: list[DocumentText], guide: str) -> list[RawField]:
+        self.calls += 1
+        return [RawField(1, "arn", "AD1", "AD1", 1)]
+
+
+def test_answer_cache_asks_once_per_question(tmp_path: Path) -> None:
+    inner = CountingExtractor()
+    cached = CachedExtractor(inner, tmp_path)
+    page = Page(1, "ARN AD1", (), "pdf_text", None)
+    documents = [DocumentText(1, "lut", "lut.pdf", (page,))]
+    first = cached.extract(documents, "lut:\n  arn")
+    assert (
+        cached.extract(documents, "lut:\n  arn") == first == [RawField(1, "arn", "AD1", "AD1", 1)]
+    )
+    assert inner.calls == 1
+    cached.extract(documents, "lut:\n  arn (another guide)")
+    assert inner.calls == 2
+
+
+def test_a_spent_quota_stops_the_run_with_a_clear_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+    monkeypatch.setattr("evals.pipeline.time.sleep", waits.append)
+    answers = iter([RateLimited(30)])
+
+    def ask() -> str:
+        error = next(answers, None)
+        if error is not None:
+            raise error
+        return "answer"
+
+    assert pipeline._patiently(ask) == "answer"
+    assert waits == [30]
+
+    def spent() -> str:
+        raise RateLimited(47_000)
+
+    with pytest.raises(RuntimeError, match=r"quota spent; it resets in 13\.1 h"):
+        pipeline._patiently(spent)
