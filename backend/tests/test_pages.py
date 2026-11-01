@@ -14,7 +14,7 @@ from shipgen.render.sheets import render_pdf
 from shipready import pages
 from shipready.api.uploads import XLSX
 from shipready.documents.models import CommercialInvoice
-from shipready.pages import Page, read_pages
+from shipready.pages import Page, Word, read_pages
 
 
 @cache
@@ -80,6 +80,9 @@ def test_workbook_sheets_are_pages_of_text() -> None:
     assert [(p.source, p.image) for p in pages] == [("cells", None), ("cells", None)]
     assert pages[0].text == "PACKING LIST\nInvoice No.  EXP/26-27/0001"
     assert pages[1].text == "MSKU1234565"
+    # Cells are words placed on the sheet's grid: B2 of a 2 x 2 sheet is its bottom right.
+    assert pages[0].words[2] == Word("EXP/26-27/0001", 0.5, 0.5, 1.0, 1.0)
+    assert pages[1].words == (Word("MSKU1234565", 0.0, 0.0, 1.0, 1.0),)
 
 
 def test_unknown_media_type_is_refused() -> None:

@@ -10,6 +10,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+# Who pays the main carriage: the shipper before departure, or the consignee on arrival.
+FreightTerms = Literal["prepaid", "collect"]
+
 
 class Model(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -161,7 +164,7 @@ class BillOfLading(Model):
     gross_weight_kg: Decimal
     volume_cbm: Decimal
     marks: str
-    freight_terms: str
+    freight_terms: FreightTerms
     shipped_on_board: date
 
 
@@ -177,7 +180,7 @@ class AirWaybill(Model):
     gross_weight_kg: Decimal
     chargeable_weight_kg: Decimal
     goods_description: str
-    freight_terms: str
+    freight_terms: FreightTerms
 
 
 class CertificateOfOrigin(Model):

@@ -6,7 +6,7 @@ boxes are fractions of the page (0..1 from the top left), so they fit the image 
 """
 
 import io
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from functools import cache
 from typing import Any, Literal
@@ -22,6 +22,17 @@ from rapidocr.utils.output import RapidOCROutput
 from shipready.api.uploads import XLSX
 
 TextSource = Literal["pdf_text", "ocr", "cells"]
+TEXT_SOURCES: tuple[TextSource, ...] = ("pdf_text", "ocr", "cells")
+
+
+def text_source(value: object) -> TextSource:
+    """`value` as a text source, for pages read back from storage."""
+    source = next((s for s in TEXT_SOURCES if s == value), None)
+    if source is None:
+        raise ValueError(f"unknown text source {value!r}")
+    return source
+
+
 RENDER_DPI = 150
 # A page with fewer characters than this in its text layer is treated as a scan.
 MIN_TEXT_CHARS = 30
@@ -191,17 +202,28 @@ def _ocr_engine() -> RapidOCR:
     return RapidOCR()
 
 
+def _cell_words(rows: Sequence[tuple[object, ...]]) -> tuple[Word, ...]:
+    """Each filled cell as a word. A sheet has no page to draw on, so a cell's box is its place
+    in the sheet's grid: column and row as fractions of the rows and columns used, which a
+    viewer turns back into the cell."""
+    width = max((len(row) for row in rows), default=0)
+    return tuple(
+        Word(str(value), c / width, r / len(rows), (c + 1) / width, (r + 1) / len(rows))
+        for r, row in enumerate(rows)
+        for c, value in enumerate(row)
+        if value is not None
+    )
+
+
 def _sheet_pages(data: bytes) -> list[Page]:
     workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     try:
         pages = []
         for number, sheet in enumerate(workbook.worksheets, start=1):
-            lines = [
-                "  ".join(str(value) for value in row if value is not None)
-                for row in sheet.iter_rows(values_only=True)
-            ]
+            rows = list(sheet.iter_rows(values_only=True))
+            lines = ["  ".join(str(value) for value in row if value is not None) for row in rows]
             text = "\n".join(line for line in lines if line)
-            pages.append(Page(number, text, (), "cells", None))
+            pages.append(Page(number, text, _cell_words(rows), "cells", None))
         return pages
     finally:
         workbook.close()
