@@ -8,6 +8,7 @@ notifications 27-29/2026, and 28 ports (12 Indian, 16 foreign by UN/LOCODE).
 
 import re
 from datetime import date
+from decimal import Decimal
 from functools import cache
 from typing import Any
 
@@ -104,3 +105,28 @@ def load_exchange_rates() -> tuple[dict[str, Any], ...]:
 @cache
 def load_ports() -> tuple[dict[str, str], ...]:
     return tuple(parse_ports("ports.csv", read_text("ports.csv", _PACKAGE)))
+
+
+class SnapshotReference:
+    """This snapshot as the reference data ShipReady's checks consult
+    (shipready.checks.reference.Reference), so checks run on ShipGen's cases agree with how they
+    were built, without a database."""
+
+    def hs_code_known(self, code: str) -> bool | None:
+        return code in load_itc_hs()
+
+    def export_policy(self, code: str, on: date) -> str | None:
+        row = load_itc_hs().get(code)
+        return str(row["export_policy"]) if row else None
+
+    def exchange_rate(self, currency: str, on: date) -> tuple[Decimal, int] | None:
+        rates = [
+            r for r in load_exchange_rates() if r["currency"] == currency and r["valid_from"] <= on
+        ]
+        if not rates:
+            return None
+        rate = max(rates, key=lambda r: r["valid_from"])
+        return rate["rate_inr"], int(rate["unit"])
+
+    def indian_port(self, code: str) -> bool | None:
+        return any(port["code"] == code and port["country"] == "IN" for port in load_ports())
