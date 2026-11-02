@@ -1,6 +1,6 @@
 """The background worker: reads each uploaded file's pages and splits it into documents, then,
 once every file of a shipment is read, reads the shipment's fields with their evidence and runs
-the checks on them.
+the checks on them, reviewed by the critic.
 
     uv run --env-file .env celery -A shipready.worker worker --pool=solo --loglevel=info
     uv run --env-file .env python -m shipready.worker requeue    # queue files still "uploaded"
@@ -20,21 +20,26 @@ from functools import cache
 from typing import Any
 
 from celery import Celery
+from PIL import Image
 from sqlalchemy import Engine, delete, select
 from sqlalchemy.orm import Session
 
 from shipready.ai import (
+    Critic,
     Embedder,
     Judge,
     PageClassifier,
     RateLimited,
     ai_mode,
     classifier_from_env,
+    critic_from_env,
     embedder_from_env,
     extractor_from_env,
     judge_from_env,
 )
+from shipready.checks.critic import crop_png, review
 from shipready.checks.engine import run_checks
+from shipready.checks.readiness import assess
 from shipready.checks.reference import DbReference
 from shipready.checks.semantic import DbKnowledge, run_semantic_checks
 from shipready.classify import split_into_parts
@@ -93,7 +98,7 @@ def extract_shipment(self: Any, shipment_id: str) -> None:
 @app.task(name="shipready.worker.check_shipment", bind=True, max_retries=8)  # type: ignore[untyped-decorator]
 def check_shipment(self: Any, shipment_id: str) -> None:
     try:
-        check(_engine(), _judge(), _embedder(), uuid.UUID(shipment_id))
+        check(_engine(), _storage(), _judge(), _embedder(), _critic(), uuid.UUID(shipment_id))
     except RateLimited as error:
         raise self.retry(countdown=error.retry_after) from error
 
@@ -175,9 +180,17 @@ def extract(engine: Engine, extractor: FieldExtractor, shipment_id: uuid.UUID) -
             raise
 
 
-def check(engine: Engine, judge: Judge, embedder: Embedder, shipment_id: uuid.UUID) -> None:
-    """Run every check, deterministic and semantic, on the shipment's extracted fields and
-    store each result, replacing those of an earlier run."""
+def check(
+    engine: Engine,
+    storage: Storage,
+    judge: Judge,
+    embedder: Embedder,
+    critic: Critic,
+    shipment_id: uuid.UUID,
+) -> None:
+    """Run every check, deterministic and semantic, on the shipment's extracted fields, have
+    the critic review the failures against the page images, and store each result and the
+    suggested readiness, replacing those of an earlier run."""
     with Session(engine) as session:
         shipment = session.get(Shipment, shipment_id)
         if shipment is None:
@@ -194,6 +207,8 @@ def check(engine: Engine, judge: Judge, embedder: Embedder, shipment_id: uuid.UU
             results = run_checks(values, reference) + run_semantic_checks(
                 values, reference, judge, DbKnowledge(session, embedder)
             )
+            results = review(results, DbEvidence(session, storage, shipment_id), critic)
+            assessment = assess(results)
             session.execute(delete(CheckResult).where(CheckResult.shipment_id == shipment_id))
             session.add_all(
                 CheckResult(
@@ -203,9 +218,13 @@ def check(engine: Engine, judge: Judge, embedder: Embedder, shipment_id: uuid.UU
                     message=result.message,
                     evidence=list(result.evidence),
                     citations=[asdict(citation) for citation in result.citations],
+                    verification=result.verification,
+                    critic_reason=result.critic_reason,
                 )
                 for result in results
             )
+            shipment.readiness = assessment.readiness
+            shipment.readiness_score = assessment.score
             shipment.status, shipment.error = "CHECKED", None
             session.commit()
         except RateLimited:
@@ -214,6 +233,38 @@ def check(engine: Engine, judge: Judge, embedder: Embedder, shipment_id: uuid.UU
         except Exception as error:
             _failed(session, shipment, error, "checking")
             raise
+
+
+class DbEvidence:
+    """The critic's evidence: the shipment's extracted fields and crops of their stored page
+    images (a spreadsheet's cells have none)."""
+
+    def __init__(self, session: Session, storage: Storage, shipment_id: uuid.UUID) -> None:
+        self.session = session
+        self.storage = storage
+        rows = session.execute(
+            select(ExtractedField, DocumentPage.image_key)
+            .join(DocumentPart, ExtractedField.part_id == DocumentPart.id)
+            .outerjoin(
+                DocumentPage,
+                (DocumentPage.document_id == DocumentPart.document_id)
+                & (DocumentPage.page_no == ExtractedField.page_no),
+            )
+            .where(ExtractedField.shipment_id == shipment_id)
+        )
+        self.fields = {field.path: (field, image_key) for field, image_key in rows}
+
+    def read(self, path: str) -> tuple[str, str] | None:
+        found = self.fields.get(path)
+        return (found[0].value, found[0].quote) if found else None
+
+    def crop(self, path: str) -> bytes | None:
+        field, image_key = self.fields.get(path, (None, None))
+        if field is None or field.box is None or image_key is None:
+            return None
+        box = field.box
+        with Image.open(io.BytesIO(self.storage.get(image_key))) as page:
+            return crop_png(page, (box["x0"], box["y0"], box["x1"], box["y1"]))
 
 
 def _failed(session: Session, shipment: Shipment, error: Exception, stage: str) -> None:
@@ -301,6 +352,11 @@ def _extractor() -> FieldExtractor:
 @cache
 def _judge() -> Judge:
     return judge_from_env()
+
+
+@cache
+def _critic() -> Critic:
+    return critic_from_env()
 
 
 @cache

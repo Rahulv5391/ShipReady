@@ -13,7 +13,7 @@ from shipgen.documents import build_documents
 from shipgen.generator import generate_shipment
 from shipgen.render.sheets import render_pdf
 from shipready import worker
-from shipready.ai import AiAnswer, Question, RateLimited, Verdict
+from shipready.ai import AiAnswer, Question, RateLimited, Review, Suspect, Verdict
 from shipready.checks.engine import deterministic_rules
 from shipready.checks.semantic import semantic_rules
 from shipready.db.models import (
@@ -305,6 +305,19 @@ class AgreeingJudge:
         return [Verdict(q.id, True, 1.0, "") for q in questions]
 
 
+class NoMisreads:
+    """A critic that finds every failure real."""
+
+    model = "no-misreads"
+
+    def __init__(self) -> None:
+        self.seen: list[Suspect] = []
+
+    def review(self, suspects: list[Suspect]) -> list[Review]:
+        self.seen += suspects
+        return [Review(s.id, True, 1.0, "as printed") for s in suspects]
+
+
 class FlatEmbedder:
     model = "flat"
 
@@ -339,8 +352,10 @@ def test_checks_run_on_the_extracted_fields(
 ) -> None:
     shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
     worker.extract(engine_of, MismatchedQuantities(), shipment_id)
-    worker.check(engine_of, AgreeingJudge(), FlatEmbedder(), shipment_id)
-    worker.check(engine_of, AgreeingJudge(), FlatEmbedder(), shipment_id)  # replaces them
+    worker.check(engine_of, storage, AgreeingJudge(), FlatEmbedder(), NoMisreads(), shipment_id)
+    worker.check(
+        engine_of, storage, AgreeingJudge(), FlatEmbedder(), NoMisreads(), shipment_id
+    )  # replaces them
 
     session.expire_all()
     shipment = session.get(Shipment, shipment_id)
@@ -375,7 +390,7 @@ def test_a_failed_check_run_is_recorded(
 
     monkeypatch.setattr(worker, "run_checks", broken)
     with pytest.raises(RuntimeError):
-        worker.check(engine_of, AgreeingJudge(), FlatEmbedder(), shipment_id)
+        worker.check(engine_of, storage, AgreeingJudge(), FlatEmbedder(), NoMisreads(), shipment_id)
     session.expire_all()
     shipment = session.get(Shipment, shipment_id)
     assert shipment is not None
@@ -404,7 +419,7 @@ def test_a_rate_limited_judge_retries_the_checks_only(monkeypatch: pytest.Monkey
         retries.append(countdown)
         return RuntimeError("retry scheduled")
 
-    for name in ("_engine", "_judge", "_embedder"):
+    for name in ("_engine", "_storage", "_judge", "_embedder", "_critic"):
         monkeypatch.setattr(worker, name, lambda: None)
     monkeypatch.setattr(worker, "check", limited)
     monkeypatch.setattr(worker.check_shipment, "retry", retry)
@@ -428,7 +443,36 @@ def test_a_rate_limited_check_leaves_no_error(
     session.commit()
     worker.extract(engine_of, DescribedInvoice(), shipment_id)
     with pytest.raises(RateLimited):
-        worker.check(engine_of, LimitedJudge(), FlatEmbedder(), shipment_id)
+        worker.check(engine_of, storage, LimitedJudge(), FlatEmbedder(), NoMisreads(), shipment_id)
     session.expire_all()
     shipment = session.get(Shipment, shipment_id)
     assert shipment is not None and (shipment.status, shipment.error) == ("EXTRACTED", None)
+
+
+class AllMisread(NoMisreads):
+    """A critic that finds every failure a misreading."""
+
+    def review(self, suspects: list[Suspect]) -> list[Review]:
+        self.seen += suspects
+        return [Review(s.id, False, 0.95, "the page shows the same quantity") for s in suspects]
+
+
+def test_the_critic_sees_the_pages_and_its_verdict_is_kept(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
+    worker.extract(engine_of, MismatchedQuantities(), shipment_id)
+    critic = AllMisread()
+    worker.check(engine_of, storage, AgreeingJudge(), FlatEmbedder(), critic, shipment_id)
+
+    (quantities,) = [s for s in critic.seen if s.id == "QTY-01"]
+    assert quantities.crops and all(c.png.startswith(b"\x89PNG") for c in quantities.crops)
+    session.expire_all()
+    results = {r.rule_id: r for r in session.scalars(select(CheckResult))}
+    reviewed = results["QTY-01"]
+    assert (reviewed.outcome, reviewed.verification) == ("not_verified", "misread")
+    assert reviewed.critic_reason == "the page shows the same quantity"
+    shipment = session.get(Shipment, shipment_id)
+    # The missing documents (DOC-01) still hold the shipment: they have nothing to misread.
+    assert shipment is not None and shipment.readiness == "needs_fix"
+    assert shipment.readiness_score is not None and 0 <= shipment.readiness_score < 100

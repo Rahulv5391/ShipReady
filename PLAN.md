@@ -1097,7 +1097,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - *Exit:* overall finding recall ≥ 90% and precision ≥ 85% on validation.
 
 **Phase 15: Verification and readiness score**
-- Critic agent, severity handling, readiness score.
+- Critic agent, severity handling, readiness score. Built with a Gemini vision critic until the OpenAI key arrives; readiness as a suggestion (ready, needs fix, needs review) and a severity-weighted score (Decision.md D-32).
 - *Exit:* precision gain from the Critic measured.
 
 ### Stage D: Agents, review and UI

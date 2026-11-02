@@ -111,6 +111,8 @@ def list_checks(
             message=result.message,
             evidence=[fields[path] for path in result.evidence if path in fields],
             citations=[_citation(c) for c in result.citations],
+            verification=result.verification,
+            critic_reason=result.critic_reason,
         )
         for result in results
     ]

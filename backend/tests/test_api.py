@@ -158,6 +158,7 @@ def test_create_and_read_a_shipment(client: TestClient) -> None:
     shipment_id = new_shipment(client, "  JOB-001  ", mode="sea")
     body = client.get(f"/api/v1/shipments/{shipment_id}", headers=headers()).json()
     assert (body["reference"], body["mode"], body["status"]) == ("JOB-001", "sea", "RECEIVED")
+    assert (body["readiness"], body["readiness_score"]) == (None, None)  # not checked yet
     assert body["documents"] == []
 
 
@@ -518,6 +519,8 @@ def test_checks_are_listed_failures_first_with_their_evidence(
                 outcome="fail",
                 message="invoice number EXP/1, shipping bill EXP/2",
                 evidence=["commercial_invoice.invoice_number", "shipping_bill.invoice_number"],
+                verification="kept",
+                critic_reason="the shipping bill shows EXP/2",
             ),
             CheckResult(
                 shipment_id=uuid.UUID(shipment_id),
@@ -550,6 +553,11 @@ def test_checks_are_listed_failures_first_with_their_evidence(
     assert citation["url"].startswith("https://content.dgft.gov.in/")
     failed = checks[1]
     assert failed["citations"] == []
+    assert (failed["verification"], failed["critic_reason"]) == (
+        "kept",
+        "the shipping bill shows EXP/2",
+    )
+    assert (checks[0]["verification"], checks[0]["critic_reason"]) == (None, "")
     assert (failed["title"], failed["severity"]) == (
         "Invoice number and date match the shipping bill",
         "blocker",

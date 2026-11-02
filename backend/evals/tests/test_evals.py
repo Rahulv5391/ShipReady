@@ -201,11 +201,26 @@ def test_page_cache_returns_the_same_pages(dataset: Path, tmp_path: Path) -> Non
     path = next(p for p, _ in case.files.items() if p.endswith(".pdf"))
     data = (case.folder / path).read_bytes()
     first = page_cache.cached_pages(data, "application/pdf", tmp_path)
-    (stored,) = tmp_path.iterdir()
+    (stored,) = tmp_path.glob("*.json")
     assert stored.name.endswith(f"-{page_cache.reader_fingerprint()}.json")
     again = page_cache.cached_pages(data, "application/pdf", tmp_path)
     assert again == first
     assert all(page.image is None for page in again)
+    # The images are kept beside, as read, and served without reading again.
+    assert len(list(tmp_path.glob("*.jpg"))) == len(first)
+    image = page_cache.page_image(data, "application/pdf", 1, tmp_path)
+    assert image is not None and image.size[0] > 1000
+
+
+def test_images_of_pages_cached_before_are_read_once(dataset: Path, tmp_path: Path) -> None:
+    case = load_cases(dataset, "dev")[0]
+    path = next(p for p, _ in case.files.items() if p.endswith(".pdf"))
+    data = (case.folder / path).read_bytes()
+    page_cache.cached_pages(data, "application/pdf", tmp_path)
+    for jpg in tmp_path.glob("*.jpg"):
+        jpg.unlink()  # as cached before images were kept
+    assert page_cache.page_image(data, "application/pdf", 1, tmp_path) is not None
+    assert any(tmp_path.glob("*.jpg"))
 
 
 def test_page_cache_reads_afresh_when_the_reader_changes(

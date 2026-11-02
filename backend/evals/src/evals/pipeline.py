@@ -15,29 +15,35 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from evals.answer_cache import CachedExtractor, CachedJudge
+from evals.answer_cache import CachedCritic, CachedExtractor, CachedJudge
 from evals.cases import load_case
-from evals.page_cache import cached_pages
+from evals.page_cache import cached_pages, page_image
 from shipready.ai import (
     AiAnswer,
     AiMode,
+    Critic,
     GeminiClassifier,
     Judge,
     PageClassifier,
     Question,
     RateLimited,
+    Review,
+    Suspect,
     Verdict,
+    critic_from_env,
     embedder_from_env,
     extractor_from_env,
     judge_from_env,
 )
 from shipready.api.uploads import media_type
+from shipready.checks.critic import crop_png, review
 from shipready.checks.engine import run_checks
+from shipready.checks.readiness import assess
 from shipready.checks.reference import DbReference
 from shipready.checks.semantic import DbKnowledge, run_semantic_checks
 from shipready.classify import split_into_parts
 from shipready.db.session import make_engine
-from shipready.extract import DocumentText, FieldExtractor, RawField, extract_fields
+from shipready.extract import Box, DocumentText, FieldExtractor, RawField, extract_fields
 
 # Waits for a rate-limited or overloaded AI before the run gives up (a spent daily quota will
 # not recover).
@@ -56,6 +62,9 @@ class Prediction:
     fields: dict[str, object] = field(default_factory=dict)  # same paths as EvalCase.fields
     located: frozenset[str] = frozenset()  # field paths whose evidence box was found
     findings: frozenset[str] = frozenset()  # rule IDs reported
+    readiness: str | None = None  # ready, needs_fix or needs_review (Phase 15)
+    # Where each extracted field was read: path -> (file, quote, page, box).
+    evidence: dict[str, tuple[str, str, int, Box | None]] = field(default_factory=dict)
     cost_usd: Decimal = Decimal(0)
 
 
@@ -109,22 +118,51 @@ class ExtractPipeline:
     def run(self, folder: Path, files: tuple[str, ...]) -> Prediction:
         predicted, documents = read_documents(folder, files, "never", None)
         fields = extract_fields(documents, self.extractor)
+        files_of = {document.part: document.filename for document in documents}
         return Prediction(
             files=predicted,
             fields={f.path: f.value for f in fields},
             located=frozenset(f.path for f in fields if f.box is not None),
+            evidence={f.path: (files_of[f.part], f.quote, f.page, f.box) for f in fields},
         )
+
+
+class FileEvidence:
+    """The critic's evidence from the dataset's files: crops of the cached page images."""
+
+    def __init__(self, folder: Path, prediction: Prediction) -> None:
+        self.folder = folder
+        self.prediction = prediction
+
+    def read(self, path: str) -> tuple[str, str] | None:
+        if path not in self.prediction.evidence:
+            return None
+        return str(self.prediction.fields[path]), self.prediction.evidence[path][1]
+
+    def crop(self, path: str) -> bytes | None:
+        if path not in self.prediction.evidence:
+            return None
+        file, _, page, box = self.prediction.evidence[path]
+        if box is None:
+            return None
+        data = (self.folder / file).read_bytes()
+        image = page_image(data, media_type(data) or "", page, PAGE_CACHE)
+        return crop_png(image, (box.x0, box.y0, box.x1, box.y1)) if image else None
 
 
 class ChecksPipeline:
     """Runs every check, deterministic (Phase 13) and semantic (Phase 14), on fields: those
     `ExtractPipeline` reads from the files, or, with `on_labels`, the dataset's labelled fields.
     The latter is the one pipeline that reads the answers (case.json): it measures the checks
-    apart from extraction. The judge's answers are cached like extraction's."""
+    apart from extraction. With `critic`, failures are reviewed against the page images
+    (Phase 15). The judge's and critic's answers are cached like extraction's."""
 
-    def __init__(self, on_labels: bool) -> None:
-        self.name = "checks-on-labels" if on_labels else "checks"
+    def __init__(self, on_labels: bool, critic: bool = False) -> None:
+        self.name = "checks-on-labels" if on_labels else "checks+critic" if critic else "checks"
         self.extract = None if on_labels else ExtractPipeline()
+        self.critic = (
+            CachedCritic(_PatientCritic(critic_from_env()), ANSWER_CACHE) if critic else None
+        )
         self.session = Session(make_engine())
         self.reference = DbReference(self.session)
         try:
@@ -142,8 +180,10 @@ class ChecksPipeline:
         results = run_checks(read.fields, self.reference) + run_semantic_checks(
             read.fields, self.reference, self.judge, self.knowledge
         )
+        if self.critic is not None:
+            results = review(results, FileEvidence(folder, read), self.critic)
         failed = frozenset(r.rule_id for r in results if r.outcome == "fail")
-        return replace(read, findings=failed)
+        return replace(read, findings=failed, readiness=assess(results).readiness)
 
 
 def read_documents(
@@ -195,6 +235,15 @@ class _PatientClassifier:
         return _patiently(lambda: self.ai.classify(page_text))
 
 
+class _PatientCritic:
+    def __init__(self, critic: Critic) -> None:
+        self.inner = critic
+        self.model = critic.model
+
+    def review(self, suspects: list[Suspect]) -> list[Review]:
+        return _patiently(lambda: self.inner.review(suspects))
+
+
 class _PatientJudge:
     def __init__(self, judge: Judge) -> None:
         self.inner = judge
@@ -221,4 +270,5 @@ PIPELINES: dict[str, Callable[[], Pipeline]] = {
     "extract": ExtractPipeline,
     "checks": partial(ChecksPipeline, on_labels=False),
     "checks-on-labels": partial(ChecksPipeline, on_labels=True),
+    "checks+critic": partial(ChecksPipeline, on_labels=False, critic=True),
 }

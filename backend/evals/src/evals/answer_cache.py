@@ -13,11 +13,21 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from shipready.ai import EXTRACT_INSTRUCTIONS, JUDGE_INSTRUCTIONS, Judge, Question, Verdict
+from shipready.ai import (
+    CRITIC_INSTRUCTIONS,
+    EXTRACT_INSTRUCTIONS,
+    JUDGE_INSTRUCTIONS,
+    Critic,
+    Judge,
+    Question,
+    Review,
+    Suspect,
+    Verdict,
+)
 from shipready.extract import DocumentText, FieldExtractor, RawField
 
 
-def _answer[T: (RawField, Verdict)](
+def _answer[T: (RawField, Verdict, Review)](
     directory: Path,
     question: object,
     ask: Callable[[], list[T]],
@@ -77,4 +87,33 @@ class CachedJudge:
             question,
             lambda: self.inner.judge(questions),
             lambda item: Verdict(**item),
+        )
+
+
+class CachedCritic:
+    def __init__(self, critic: Critic, directory: Path) -> None:
+        self.inner = critic
+        self.directory = directory
+        self.model = critic.model
+
+    def review(self, suspects: list[Suspect]) -> list[Review]:
+        question = {
+            "model": self.model,
+            "instructions": CRITIC_INSTRUCTIONS,
+            "suspects": [
+                [
+                    s.id,
+                    s.check,
+                    s.problem,
+                    [list(f) for f in s.fields],
+                    [[c.path, hashlib.sha256(c.png).hexdigest()] for c in s.crops],
+                ]
+                for s in suspects
+            ],
+        }
+        return _answer(
+            self.directory,
+            question,
+            lambda: self.inner.review(suspects),
+            lambda item: Review(**item),
         )

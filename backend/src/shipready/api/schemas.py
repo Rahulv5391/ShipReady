@@ -25,6 +25,9 @@ class ShipmentOut(BaseModel):
     mode: str | None
     status: str
     error: str | None
+    # Suggested once checked: ready, needs_fix or needs_review, and a 0-100 score.
+    readiness: str | None
+    readiness_score: Decimal | None
     created_at: datetime
 
 
@@ -70,6 +73,9 @@ class CheckOut(BaseModel):
     message: str
     evidence: list[FieldOut]
     citations: list[CitationOut]
+    # The critic's review of a failure against the page images: kept, or misread.
+    verification: str | None
+    critic_reason: str
 
 
 class DocumentPartOut(BaseModel):

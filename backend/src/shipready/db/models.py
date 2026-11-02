@@ -173,6 +173,9 @@ EMBEDDING_DIMENSIONS = 768
 # A check's outcome (shipready.checks.engine): not verified when a value it needs is missing or
 # our reference data cannot decide it.
 CHECK_OUTCOMES = ("pass", "fail", "not_verified")
+READINESS = ("ready", "needs_fix", "needs_review")
+# The critic's review of a failure (shipready.checks.critic).
+VERIFICATIONS = ("kept", "misread")
 
 
 class Organization(Base):
@@ -190,6 +193,9 @@ class Shipment(Base):
         UniqueConstraint("org_id", "reference", name="reference_unique"),
         CheckConstraint(f"mode IS NULL OR {_one_of('mode', TRANSPORT_MODES)}", name="mode_valid"),
         CheckConstraint(_one_of("status", SHIPMENT_STATUSES), name="status_valid"),
+        CheckConstraint(
+            f"readiness IS NULL OR {_one_of('readiness', READINESS)}", name="readiness_valid"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -198,6 +204,9 @@ class Shipment(Base):
     mode: Mapped[str | None] = mapped_column(String(8))
     status: Mapped[str] = mapped_column(String(16), default="RECEIVED")
     error: Mapped[str | None] = mapped_column(Text)  # why extraction failed, if it did
+    # Suggested once checked (shipready.checks.readiness); a person marks it ready.
+    readiness: Mapped[str | None] = mapped_column(String(12))
+    readiness_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -310,6 +319,10 @@ class CheckResult(Base):
     __table_args__ = (
         UniqueConstraint("shipment_id", "rule_id", name="rule_unique"),
         CheckConstraint(_one_of("outcome", CHECK_OUTCOMES), name="outcome_valid"),
+        CheckConstraint(
+            f"verification IS NULL OR {_one_of('verification', VERIFICATIONS)}",
+            name="verification_valid",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -326,6 +339,8 @@ class CheckResult(Base):
     citations: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, default=list, server_default="[]"
     )
+    verification: Mapped[str | None] = mapped_column(String(8))  # None when not reviewed
+    critic_reason: Mapped[str] = mapped_column(Text, default="", server_default="")
 
 
 class KnowledgeChunk(Base):
