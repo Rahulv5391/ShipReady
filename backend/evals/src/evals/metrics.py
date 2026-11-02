@@ -28,6 +28,10 @@ TARGETS: dict[str, tuple[str, float]] = {
     "det_recall": (">=", 0.95),
     "det_precision": (">=", 0.90),
     "false_alarms_per_clean": ("<=", 0.3),
+    # The suggested readiness (Phase 15); PLAN.md sets no target, these follow its finding
+    # targets (Decision.md D-32).
+    "ready_when_clean": (">=", 0.90),
+    "needs_fix_when_faulty": (">=", 0.95),
     "latency_p50_s": ("<=", 90),
     "latency_p95_s": ("<=", 180),
     "cost_per_shipment_usd": ("<=", 0.50),
@@ -50,12 +54,18 @@ class CaseResult:
     lines_matched: int
     lines_reported: int
     lines_expected: int
+    readiness: str | None
     latency_s: float
     cost_usd: Decimal
 
     @property
     def clean(self) -> bool:
         return not self.expected
+
+    @property
+    def faulty(self) -> bool:
+        """Whether a blocker or major error was planted: the shipment must not be ready."""
+        return any(severities()[rule] in ("blocker", "major") for rule in self.expected)
 
 
 def score_case(case: EvalCase, prediction: Prediction, latency_s: float) -> CaseResult:
@@ -89,6 +99,7 @@ def score_case(case: EvalCase, prediction: Prediction, latency_s: float) -> Case
         lines_matched=sum((expected_lines & reported_lines).values()),
         lines_reported=sum(reported_lines.values()),
         lines_expected=sum(expected_lines.values()),
+        readiness=prediction.readiness,
         latency_s=latency_s,
         cost_usd=prediction.cost_usd,
     )
@@ -131,10 +142,19 @@ def summarise(results: list[CaseResult]) -> dict[str, float | None]:
         "false_alarms_per_clean": (
             sum(len(r.reported) for r in clean) / len(clean) if clean else None
         ),
+        "ready_when_clean": _share(clean, "ready"),
+        "needs_fix_when_faulty": _share([r for r in results if r.faulty], "needs_fix"),
         "latency_p50_s": _percentile(latencies, 50),
         "latency_p95_s": _percentile(latencies, 95),
         "cost_per_shipment_usd": float(sum(r.cost_usd for r in results) / len(results)),
     }
+
+
+def _share(results: list[CaseResult], readiness: str) -> float | None:
+    """The share of `results` given `readiness`; None when there are none, or the pipeline
+    suggests no readiness."""
+    judged = [r for r in results if r.readiness is not None]
+    return _ratio(sum(r.readiness == readiness for r in judged), len(judged)) if judged else None
 
 
 def recall_by_rule(results: list[CaseResult]) -> dict[str, float]:
