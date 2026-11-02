@@ -1,6 +1,7 @@
 """Shipments: create, list and read, always within the caller's organisation."""
 
 import uuid
+from functools import cache
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -11,15 +12,25 @@ from sqlalchemy.orm import Session
 from shipready.api.deps import PrincipalDep, SessionDep
 from shipready.api.schemas import (
     BoxOut,
+    CheckOut,
     DocumentOut,
     FieldOut,
     ShipmentCreate,
     ShipmentDetail,
     ShipmentOut,
 )
-from shipready.db.models import Document, DocumentPart, ExtractedField, Shipment
+from shipready.db.models import (
+    CheckResult,
+    Document,
+    DocumentPart,
+    ExtractedField,
+    Shipment,
+)
+from shipready.rules.catalogue import RuleSpec, load_catalogue
 
 router = APIRouter(prefix="/shipments", tags=["shipments"])
+# Failures first, then what could not be decided, then what passed.
+_OUTCOME_ORDER = {"fail": 0, "not_verified": 1, "pass": 2}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -76,14 +87,47 @@ def list_fields(
     """The fields read from the shipment's documents, each with its evidence: empty until the
     shipment is extracted."""
     shipment = shipment_of(session, principal.org_id, shipment_id)
+    return list(_fields_of(session, shipment.id).values())
+
+
+@router.get("/{shipment_id}/checks")
+def list_checks(
+    shipment_id: uuid.UUID, principal: PrincipalDep, session: SessionDep
+) -> list[CheckOut]:
+    """The outcome of each check, failures first, with the fields it read as evidence: empty
+    until the shipment is checked."""
+    shipment = shipment_of(session, principal.org_id, shipment_id)
+    fields = _fields_of(session, shipment.id)
+    rules = {rule.id: rule for rule in _catalogue()}
+    results = session.scalars(select(CheckResult).where(CheckResult.shipment_id == shipment.id))
+    checks = [
+        CheckOut(
+            rule_id=result.rule_id,
+            title=rules[result.rule_id].title,
+            severity=rules[result.rule_id].severity,
+            outcome=result.outcome,
+            message=result.message,
+            evidence=[fields[path] for path in result.evidence if path in fields],
+        )
+        for result in results
+    ]
+    return sorted(checks, key=lambda c: (_OUTCOME_ORDER[c.outcome], c.rule_id))
+
+
+@cache
+def _catalogue() -> list[RuleSpec]:
+    return load_catalogue()
+
+
+def _fields_of(session: Session, shipment_id: uuid.UUID) -> dict[str, FieldOut]:
     rows = session.execute(
         select(ExtractedField, DocumentPart.document_id)
         .join(DocumentPart, ExtractedField.part_id == DocumentPart.id)
-        .where(ExtractedField.shipment_id == shipment.id)
+        .where(ExtractedField.shipment_id == shipment_id)
         .order_by(ExtractedField.path)
     )
-    return [
-        FieldOut(
+    return {
+        field.path: FieldOut(
             path=field.path,
             value=field.value,
             quote=field.quote,
@@ -93,7 +137,7 @@ def list_fields(
             model=field.model,
         )
         for field, document_id in rows
-    ]
+    }
 
 
 def shipment_of(session: Session, org_id: uuid.UUID, shipment_id: uuid.UUID) -> Shipment:

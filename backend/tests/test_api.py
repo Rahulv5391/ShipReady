@@ -18,7 +18,14 @@ from sqlalchemy.orm import Session
 from shipready.api import auth, documents, token, uploads
 from shipready.api.app import create_app
 from shipready.api.deps import get_enqueue, get_session, get_storage
-from shipready.db.models import Document, DocumentPart, ExtractedField, Organization, Shipment
+from shipready.db.models import (
+    CheckResult,
+    Document,
+    DocumentPart,
+    ExtractedField,
+    Organization,
+    Shipment,
+)
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
 from shipready.storage import Storage, settings_from_env
 
@@ -484,3 +491,56 @@ def test_new_files_make_an_extracted_shipment_wait_again(
     assert upload(client, shipment_id, ("bl.png", PNG)).status_code == 201
     detail = client.get(f"/api/v1/shipments/{shipment_id}", headers=headers()).json()
     assert detail["status"] == "RECEIVED"
+
+
+def test_checks_are_listed_failures_first_with_their_evidence(
+    client: TestClient, session: Session
+) -> None:
+    shipment_id = new_shipment(client)
+    assert client.get(f"/api/v1/shipments/{shipment_id}/checks", headers=headers()).json() == []
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    extracted(session, shipment_id)
+    session.add_all(
+        [
+            CheckResult(
+                shipment_id=uuid.UUID(shipment_id),
+                rule_id="ID-01",
+                outcome="pass",
+                message="",
+                evidence=["commercial_invoice.iec"],
+            ),
+            CheckResult(
+                shipment_id=uuid.UUID(shipment_id),
+                rule_id="INV-01",
+                outcome="fail",
+                message="invoice number EXP/1, shipping bill EXP/2",
+                evidence=["commercial_invoice.invoice_number", "shipping_bill.invoice_number"],
+            ),
+            CheckResult(
+                shipment_id=uuid.UUID(shipment_id),
+                rule_id="FX-01",
+                outcome="not_verified",
+                message="no customs export rate for USD on 2026-10-29 in our data",
+                evidence=[],
+            ),
+        ]
+    )
+    session.commit()
+
+    checks = client.get(f"/api/v1/shipments/{shipment_id}/checks", headers=headers()).json()
+    assert [(c["rule_id"], c["outcome"]) for c in checks] == [
+        ("INV-01", "fail"),
+        ("FX-01", "not_verified"),
+        ("ID-01", "pass"),
+    ]
+    failed = checks[0]
+    assert (failed["title"], failed["severity"]) == (
+        "Invoice number and date match the shipping bill",
+        "blocker",
+    )
+    # Evidence is the fields themselves; a path with no stored field (the shipping bill's
+    # number was not extracted here) has nothing to show.
+    assert [f["path"] for f in failed["evidence"]] == ["commercial_invoice.invoice_number"]
+    assert failed["evidence"][0]["box"] == {"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.25}
+    other = client.get(f"/api/v1/shipments/{shipment_id}/checks", headers=headers(OTHER_ORG_ID))
+    assert other.status_code == 404

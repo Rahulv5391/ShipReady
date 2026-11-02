@@ -14,7 +14,9 @@ from shipgen.generator import generate_shipment
 from shipgen.render.sheets import render_pdf
 from shipready import worker
 from shipready.ai import AiAnswer, RateLimited
+from shipready.checks.engine import deterministic_rules
 from shipready.db.models import (
+    CheckResult,
     Document,
     DocumentPage,
     DocumentPart,
@@ -291,3 +293,72 @@ def test_reading_the_last_file_queues_extraction(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(worker.extract_shipment, "delay", queued.append)
     worker.process_document.run(str(uuid.uuid4()))
     assert queued == [str(shipment_id)]
+
+
+class MismatchedQuantities(FakeExtractor):
+    """The invoice and the packing list give different quantities for their first line."""
+
+    def extract(self, documents: list[DocumentText], guide: str) -> list[RawField]:
+        return [
+            RawField(1, "lines[0].quantity", "10", "10", 1),
+            RawField(1, "lines[0].uqc", "PCS", "PCS", 1),
+            RawField(2, "lines[0].quantity", "12", "12", 2),
+            RawField(2, "lines[0].uqc", "PCS", "PCS", 2),
+        ]
+
+
+def test_checks_run_on_the_extracted_fields(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
+    worker.extract(engine_of, MismatchedQuantities(), shipment_id)
+    worker.check(engine_of, shipment_id)
+    worker.check(engine_of, shipment_id)  # replaces the results
+
+    session.expire_all()
+    shipment = session.get(Shipment, shipment_id)
+    assert shipment is not None and (shipment.status, shipment.error) == ("CHECKED", None)
+    results = {r.rule_id: r for r in session.scalars(select(CheckResult))}
+    assert set(results) == {rule.id for rule in deterministic_rules()}
+    quantities = results["QTY-01"]
+    assert quantities.outcome == "fail"
+    assert quantities.message == "line 1: invoice 10 PCS, packing_list 12 PCS"
+    assert quantities.evidence == [
+        "commercial_invoice.lines[0].quantity",
+        "commercial_invoice.lines[0].uqc",
+        "packing_list.lines[0].quantity",
+        "packing_list.lines[0].uqc",
+    ]
+    # The invoice and packing list show few of their mandatory fields (DOC-02); every other
+    # check lacks values and cannot be decided, and none fails for that.
+    assert {id_ for id_, r in results.items() if r.outcome == "fail"} == {"QTY-01", "DOC-02"}
+    assert results["DOC-02"].message.startswith("missing: commercial_invoice.")
+
+
+def test_a_failed_check_run_is_recorded(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
+
+    def broken(*args: object) -> None:
+        raise RuntimeError("reference tables unreadable")
+
+    monkeypatch.setattr(worker, "run_checks", broken)
+    with pytest.raises(RuntimeError):
+        worker.check(engine_of, shipment_id)
+    session.expire_all()
+    shipment = session.get(Shipment, shipment_id)
+    assert shipment is not None
+    assert shipment.error == "RuntimeError: reference tables unreadable"
+    assert session.scalar(select(func.count()).select_from(CheckResult)) == 0
+
+
+def test_extraction_task_then_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    shipment_id = uuid.uuid4()
+    calls: list[str] = []
+    monkeypatch.setattr(worker, "_engine", lambda: None)
+    monkeypatch.setattr(worker, "_extractor", lambda: None)
+    monkeypatch.setattr(worker, "extract", lambda *args: calls.append("extract"))
+    monkeypatch.setattr(worker, "check", lambda *args: calls.append("check"))
+    worker.extract_shipment.run(str(shipment_id))
+    assert calls == ["extract", "check"]

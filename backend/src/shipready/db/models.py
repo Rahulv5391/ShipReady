@@ -160,12 +160,15 @@ class RefLocation(Base):
 ORGANIZATION_TYPES = ("exporter", "cha", "forwarder", "internal")
 TRANSPORT_MODES = ("sea", "air", "road", "rail", "courier")
 # Later phases add the remaining statuses of PLAN.md Section 10.2 (checked, verified, ...).
-SHIPMENT_STATUSES = ("RECEIVED", "EXTRACTED")
+SHIPMENT_STATUSES = ("RECEIVED", "EXTRACTED", "CHECKED")
 DOCUMENT_STATUSES = ("uploaded", "processing", "processed", "failed")
 TEXT_SOURCES = ("pdf_text", "ocr", "cells")  # the PDF's own text, OCR of an image, Excel cells
 # How a part's type was decided: its title, following a titled page, the AI, or not at all
 # (no title and AI switched off; the part is "other").
 PART_DECISIONS = ("title", "follows", "ai", "none")
+# A check's outcome (shipready.checks.engine): not verified when a value it needs is missing or
+# our reference data cannot decide it.
+CHECK_OUTCOMES = ("pass", "fail", "not_verified")
 
 
 class Organization(Base):
@@ -293,3 +296,25 @@ class ExtractedField(Base):
     # was not found on the page.
     box: Mapped[dict[str, float] | None] = mapped_column(JSONB)
     model: Mapped[str] = mapped_column(Text)
+
+
+class CheckResult(Base):
+    """The outcome of one check on a shipment, with the fields it read as evidence. A
+    shipment's results are replaced each time it is checked."""
+
+    __tablename__ = "check_results"
+    __table_args__ = (
+        UniqueConstraint("shipment_id", "rule_id", name="rule_unique"),
+        CheckConstraint(_one_of("outcome", CHECK_OUTCOMES), name="outcome_valid"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    shipment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("shipments.id", ondelete="CASCADE"), index=True
+    )
+    # The catalogue's rule ID. Not a foreign key: the checks run where the catalogue table may
+    # not be seeded, and the IDs come from the same packaged catalogue.
+    rule_id: Mapped[str] = mapped_column(String(8))
+    outcome: Mapped[str] = mapped_column(String(12))
+    message: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[list[str]] = mapped_column(JSONB)  # paths into extracted_fields

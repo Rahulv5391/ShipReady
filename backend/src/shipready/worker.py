@@ -1,5 +1,6 @@
 """The background worker: reads each uploaded file's pages and splits it into documents, then,
-once every file of a shipment is read, reads the shipment's fields with their evidence.
+once every file of a shipment is read, reads the shipment's fields with their evidence and runs
+the deterministic checks on them.
 
     uv run --env-file .env celery -A shipready.worker worker --pool=solo --loglevel=info
     uv run --env-file .env python -m shipready.worker requeue    # queue files still "uploaded"
@@ -29,8 +30,17 @@ from shipready.ai import (
     classifier_from_env,
     extractor_from_env,
 )
+from shipready.checks.engine import run_checks
+from shipready.checks.reference import DbReference
 from shipready.classify import split_into_parts
-from shipready.db.models import Document, DocumentPage, DocumentPart, ExtractedField, Shipment
+from shipready.db.models import (
+    CheckResult,
+    Document,
+    DocumentPage,
+    DocumentPart,
+    ExtractedField,
+    Shipment,
+)
 from shipready.db.session import make_engine
 from shipready.extract import DocumentText, FieldExtractor, extract_fields
 from shipready.pages import Page, Word, read_pages, text_source
@@ -71,6 +81,7 @@ def extract_shipment(self: Any, shipment_id: str) -> None:
         extract(_engine(), _extractor(), uuid.UUID(shipment_id))
     except RateLimited as error:
         raise self.retry(countdown=error.retry_after) from error
+    check(_engine(), uuid.UUID(shipment_id))
 
 
 def process(
@@ -146,11 +157,50 @@ def extract(engine: Engine, extractor: FieldExtractor, shipment_id: uuid.UUID) -
             session.rollback()
             raise
         except Exception as error:
-            session.rollback()
-            shipment.error = f"{type(error).__name__}: {error}"[:MAX_ERROR_CHARS]
-            session.commit()
-            logger.exception("extracting shipment %s failed", shipment_id)
+            _failed(session, shipment, error, "extracting")
             raise
+
+
+def check(engine: Engine, shipment_id: uuid.UUID) -> None:
+    """Run the deterministic checks on the shipment's extracted fields and store each result,
+    replacing those of an earlier run."""
+    with Session(engine) as session:
+        shipment = session.get(Shipment, shipment_id)
+        if shipment is None:
+            logger.warning("shipment %s no longer exists", shipment_id)
+            return
+        try:
+            rows = session.execute(
+                select(ExtractedField.path, ExtractedField.value).where(
+                    ExtractedField.shipment_id == shipment_id
+                )
+            )
+            values = {path: value for path, value in rows}
+            results = run_checks(values, DbReference(session))
+            session.execute(delete(CheckResult).where(CheckResult.shipment_id == shipment_id))
+            session.add_all(
+                CheckResult(
+                    shipment_id=shipment_id,
+                    rule_id=result.rule_id,
+                    outcome=result.outcome,
+                    message=result.message,
+                    evidence=list(result.evidence),
+                )
+                for result in results
+            )
+            shipment.status, shipment.error = "CHECKED", None
+            session.commit()
+        except Exception as error:
+            _failed(session, shipment, error, "checking")
+            raise
+
+
+def _failed(session: Session, shipment: Shipment, error: Exception, stage: str) -> None:
+    """Keep a short reason on the shipment, so the failure shows without reading logs."""
+    session.rollback()
+    shipment.error = f"{type(error).__name__}: {error}"[:MAX_ERROR_CHARS]
+    session.commit()
+    logger.exception("%s shipment %s failed", stage, shipment.id)
 
 
 def _documents_of(

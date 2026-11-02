@@ -49,6 +49,18 @@ class FieldOut(BaseModel):
     model: str
 
 
+class CheckOut(BaseModel):
+    """A check's outcome on the shipment: pass, fail, or not verified when a value it needs is
+    missing or our reference data cannot decide it."""
+
+    rule_id: str
+    title: str
+    severity: str
+    outcome: str
+    message: str
+    evidence: list[FieldOut]
+
+
 class DocumentPartOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
