@@ -1,4 +1,7 @@
 import io
+import json
+import threading
+import time
 import uuid
 import zipfile
 from collections.abc import Iterator
@@ -15,18 +18,21 @@ from moto import mock_aws
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from shipready.api import auth, documents, token, uploads
+from shipready.api import auth, documents, review, token, uploads
 from shipready.api.app import create_app
-from shipready.api.deps import get_enqueue, get_session, get_storage
+from shipready.api.deps import get_enqueue, get_recheck, get_session, get_storage
 from shipready.db.models import (
     CheckResult,
     Document,
     DocumentPart,
     ExtractedField,
+    Message,
     Organization,
+    Run,
     Shipment,
 )
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
+from shipready.runs import await_review, current_run, finish, record
 from shipready.storage import Storage, settings_from_env
 
 SECRET = "test-secret-that-is-long-enough-for-hs256"
@@ -61,8 +67,18 @@ def queued() -> list[uuid.UUID]:
 
 
 @pytest.fixture
+def rechecked() -> list[uuid.UUID]:
+    """Shipments the API queued to be checked again."""
+    return []
+
+
+@pytest.fixture
 def client(
-    session: Session, storage: Storage, queued: list[uuid.UUID], monkeypatch: pytest.MonkeyPatch
+    session: Session,
+    storage: Storage,
+    queued: list[uuid.UUID],
+    rechecked: list[uuid.UUID],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[TestClient]:
     monkeypatch.setenv(auth.SECRET_VARIABLE, SECRET)
     session.add_all(
@@ -76,6 +92,7 @@ def client(
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_enqueue] = lambda: queued.append
+    app.dependency_overrides[get_recheck] = lambda: rechecked.append
     yield TestClient(app)
 
 
@@ -568,3 +585,237 @@ def test_checks_are_listed_failures_first_with_their_evidence(
     assert failed["evidence"][0]["box"] == {"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.25}
     other = client.get(f"/api/v1/shipments/{shipment_id}/checks", headers=headers(OTHER_ORG_ID))
     assert other.status_code == 404
+
+
+# --- runs and review ---
+
+
+def under_review(session: Session, shipment_id: str) -> Run:
+    """The shipment's run, its files read and checked, now awaiting review."""
+    shipment = session.get_one(Shipment, uuid.UUID(shipment_id))
+    run = current_run(session, shipment)
+    await_review(session, run, shipment)
+    session.commit()
+    return run
+
+
+def drafted(session: Session, shipment_id: str, run: Run, *recipients: str) -> list[str]:
+    messages = [
+        Message(
+            shipment_id=uuid.UUID(shipment_id),
+            run_id=run.id,
+            recipient=recipient,
+            subject=f"JOB-001: for the {recipient}",
+            body="Please correct the document.",
+            rule_ids=["WT-01"],
+        )
+        for recipient in recipients
+    ]
+    session.add_all(messages)
+    session.commit()
+    return [str(m.id) for m in messages]
+
+
+def event_names(stream: str) -> list[str]:
+    blocks = [block for block in stream.split("\n\n") if block]
+    return [
+        line.removeprefix("event: ")
+        for b in blocks
+        for line in b.split("\n")
+        if line.startswith("event: ")
+    ]
+
+
+def test_an_upload_starts_a_run(client: TestClient) -> None:
+    shipment_id = new_shipment(client)
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    (run,) = client.get(f"/api/v1/shipments/{shipment_id}/runs", headers=headers()).json()
+    assert (run["trigger"], run["status"], run["stage"]) == ("upload", "running", "reading")
+    same = client.get(f"/api/v1/runs/{run['id']}", headers=headers()).json()
+    assert same == run
+    upload(client, shipment_id, ("bl.png", PNG))  # joins the run in progress
+    assert len(client.get(f"/api/v1/shipments/{shipment_id}/runs", headers=headers()).json()) == 1
+    other = client.get(f"/api/v1/runs/{run['id']}", headers=headers(OTHER_ORG_ID))
+    assert other.status_code == 404
+
+
+def test_a_recheck_waits_for_the_run_in_progress_and_read_files(
+    client: TestClient, session: Session, rechecked: list[uuid.UUID]
+) -> None:
+    shipment_id = new_shipment(client)
+    recheck = f"/api/v1/shipments/{shipment_id}/runs"
+    not_read = client.post(recheck, headers=headers())
+    assert (not_read.status_code, not_read.json()["detail"]) == (
+        409,
+        "the shipment's files are not all read",
+    )
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    busy = client.post(recheck, headers=headers())
+    assert (busy.status_code, busy.json()["detail"]) == (
+        409,
+        "a run of this shipment is in progress",
+    )
+    run = session.scalars(select(Run)).one()
+    finish(session, run)
+    for document in session.scalars(select(Document)):
+        document.status = "processed"
+    session.commit()
+
+    response = client.post(recheck, headers=headers())
+    assert response.status_code == 201, response.text
+    assert (response.json()["trigger"], response.json()["stage"]) == ("recheck", "extracting")
+    assert rechecked == [uuid.UUID(shipment_id)]
+
+
+def test_run_events_stream_and_resume(client: TestClient, session: Session) -> None:
+    shipment_id = new_shipment(client)
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    run = session.scalars(select(Run)).one()
+    finish(session, run, "extracting failed: ValueError")
+    session.commit()
+    path = f"/api/v1/runs/{run.id}/events"
+
+    response = client.get(path, headers=headers())
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert event_names(response.text) == [
+        "run_started",
+        "files_uploaded",
+        "stage_started",
+        "run_failed",
+    ]
+    blocks = [block.split("\n") for block in response.text.split("\n\n") if block]
+    assert json.loads(blocks[-1][2].removeprefix("data: "))["error"] == (
+        "extracting failed: ValueError"
+    )
+    second = blocks[1][0].removeprefix("id: ")
+
+    resumed = client.get(path, headers={**headers(), "Last-Event-ID": second}).text
+    assert event_names(resumed) == ["stage_started", "run_failed"]
+    assert client.get(path, headers=headers(OTHER_ORG_ID)).status_code == 404
+
+
+def test_drafted_messages_are_edited_approved_or_discarded(
+    client: TestClient, session: Session
+) -> None:
+    shipment_id = new_shipment(client)
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    run = under_review(session, shipment_id)
+    forwarder, buyer = drafted(session, shipment_id, run, "forwarder", "buyer")
+
+    listed = client.get(f"/api/v1/shipments/{shipment_id}/messages", headers=headers()).json()
+    assert {m["recipient"] for m in listed} == {"forwarder", "buyer"}
+    edited = client.patch(
+        f"/api/v1/messages/{forwarder}",
+        json={"body": "  Please send a corrected copy.  "},
+        headers=headers(),
+    ).json()
+    assert (edited["body"], edited["subject"]) == (
+        "Please send a corrected copy.",
+        "JOB-001: for the forwarder",
+    )
+    blank = client.patch(f"/api/v1/messages/{forwarder}", json={"body": ""}, headers=headers())
+    assert blank.status_code == 422
+    approved = client.post(f"/api/v1/messages/{forwarder}/approve", headers=headers()).json()
+    assert approved["status"] == "approved"
+    again = client.post(f"/api/v1/messages/{forwarder}/discard", headers=headers())
+    assert (again.status_code, again.json()["detail"]) == (409, "the message is already approved")
+    discarded = client.post(f"/api/v1/messages/{buyer}/discard", headers=headers()).json()
+    assert discarded["status"] == "discarded"
+    foreign = client.post(f"/api/v1/messages/{buyer}/approve", headers=headers(OTHER_ORG_ID))
+    assert foreign.status_code == 404
+
+    decisions = client.get(f"/api/v1/shipments/{shipment_id}/approvals", headers=headers()).json()
+    assert [(d["action"], d["target_id"], d["decided_by"]) for d in decisions] == [
+        ("approve_message", forwarder, "tester"),
+        ("discard_message", buyer, "tester"),
+    ]
+
+
+def test_marking_ready_with_a_failed_blocker_needs_a_reason(
+    client: TestClient, session: Session
+) -> None:
+    shipment_id = new_shipment(client)
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    ready = f"/api/v1/shipments/{shipment_id}/mark-ready"
+    early = client.post(ready, json={}, headers=headers())
+    assert (early.status_code, early.json()["detail"]) == (
+        409,
+        "the shipment is not awaiting review",
+    )
+    run = under_review(session, shipment_id)
+    session.add(
+        CheckResult(
+            shipment_id=uuid.UUID(shipment_id),
+            rule_id="QTY-01",
+            outcome="fail",
+            message="line 1 differs",
+            evidence=[],
+        )
+    )
+    session.commit()
+
+    refused = client.post(ready, json={}, headers=headers())
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409,
+        "blocker checks fail (QTY-01); give a reason to mark it ready anyway",
+    )
+    decided = client.post(
+        ready, json={"reason": "buyer accepted the short shipment"}, headers=headers()
+    ).json()
+    assert (decided["action"], decided["reason"], decided["run_id"]) == (
+        "mark_ready",
+        "buyer accepted the short shipment",
+        str(run.id),
+    )
+    detail = client.get(f"/api/v1/shipments/{shipment_id}", headers=headers()).json()
+    assert detail["status"] == "READY"
+    (finished,) = client.get(f"/api/v1/shipments/{shipment_id}/runs", headers=headers()).json()
+    assert finished["status"] == "done" and finished["finished_at"] is not None
+    assert client.post(ready, json={}, headers=headers()).status_code == 409  # decided already
+
+
+def test_a_shipment_sent_back_for_fixes(client: TestClient, session: Session) -> None:
+    shipment_id = new_shipment(client)
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    under_review(session, shipment_id)
+    decided = client.post(
+        f"/api/v1/shipments/{shipment_id}/mark-needs-fix", json={}, headers=headers()
+    ).json()
+    assert (decided["action"], decided["reason"]) == ("mark_needs_fix", None)
+    detail = client.get(f"/api/v1/shipments/{shipment_id}", headers=headers()).json()
+    assert detail["status"] == "NEEDS_FIX"
+    # Corrected files start a new run.
+    upload(client, shipment_id, ("bl.png", PNG))
+    runs = client.get(f"/api/v1/shipments/{shipment_id}/runs", headers=headers()).json()
+    assert [r["status"] for r in runs] == ["running", "done"]
+
+
+def test_events_arrive_on_an_open_stream(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(review, "POLL_S", 0.05)
+    shipment_id = new_shipment(client)
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    run_id = session.scalars(select(Run.id)).one()
+    engine = session.get_bind()
+
+    def worker_steps() -> None:
+        time.sleep(0.5)  # the stream is open and quiet by now
+        with Session(engine) as other:
+            run = other.get_one(Run, run_id)
+            record(other, run, "document_read", file="invoice.pdf")
+            finish(other, run, "extracting failed: ValueError")
+            other.commit()
+
+    thread = threading.Thread(target=worker_steps)
+    thread.start()
+    with client.stream("GET", f"/api/v1/runs/{run_id}/events", headers=headers()) as response:
+        streamed = response.read().decode()
+    thread.join()
+    assert event_names(streamed) == [
+        "run_started",
+        "files_uploaded",
+        "stage_started",
+        "document_read",
+        "run_failed",
+    ]

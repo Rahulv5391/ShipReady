@@ -33,7 +33,15 @@ def get_enqueue() -> Callable[[uuid.UUID], None]:
     return lambda document_id: process_document.delay(str(document_id))
 
 
+def get_recheck() -> Callable[[uuid.UUID], None]:
+    """Queue a shipment's extraction and checks again, its files already read."""
+    from shipready.worker import extract_shipment
+
+    return lambda shipment_id: extract_shipment.delay(str(shipment_id))
+
+
 SessionDep = Annotated[Session, Depends(get_session)]
 EnqueueDep = Annotated[Callable[[uuid.UUID], None], Depends(get_enqueue)]
+RecheckDep = Annotated[Callable[[uuid.UUID], None], Depends(get_recheck)]
 StorageDep = Annotated[Storage, Depends(get_storage)]
 PrincipalDep = Annotated[Principal, Depends(current_principal)]

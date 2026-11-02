@@ -106,3 +106,56 @@ class DocumentOut(BaseModel):
 
 class ShipmentDetail(ShipmentOut):
     documents: list[DocumentOut]
+
+
+class RunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    shipment_id: uuid.UUID
+    trigger: str
+    status: str  # running, awaiting_review, done, failed
+    stage: str | None
+    error: str | None
+    started_at: datetime
+    finished_at: datetime | None
+
+
+class MessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    recipient: str
+    subject: str
+    body: str
+    rule_ids: list[str]
+    status: str  # draft, approved, discarded
+    created_at: datetime
+
+
+class MessageEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subject: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
+    body: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
+
+
+class Decision(BaseModel):
+    """A person's reason: required to mark a shipment ready while blockers are open."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
+
+
+class ApprovalOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    run_id: uuid.UUID | None
+    action: str
+    target_id: uuid.UUID | None
+    decided_by: str
+    reason: str | None
+    decided_at: datetime

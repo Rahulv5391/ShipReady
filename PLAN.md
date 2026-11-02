@@ -1103,7 +1103,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 ### Stage D: Agents, review and UI
 
 **Phase 16: Orchestrator and human approval**
-- Orchestrator with the Agents SDK, Drafter agent, guardrails and budgets, `needs_approval` tools, persisted run state, approvals API, live progress over SSE.
+- Orchestrator with the Agents SDK, Drafter agent, guardrails and budgets, `needs_approval` tools, persisted run state, approvals API, live progress over SSE. Built without the Agents SDK until the OpenAI key arrives: the worker runs the stages in a fixed order, the drafter is on Gemini (Decision.md D-33).
 - *Exit:* a full run pauses for approval and resumes.
 
 **Phase 17: Web app, queue and upload**
