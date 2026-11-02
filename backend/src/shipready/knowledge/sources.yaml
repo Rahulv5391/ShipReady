@@ -1,6 +1,6 @@
 # Regulatory texts for the compliance checks' knowledge base (PLAN.md Section 5.3), from official
-# government sites only. Fetched by `python -m shipready.knowledge.fetch`; where they are indexed
-# (OpenAI File Search or pgvector) is decided in Phase 14 (Decision.md D-24).
+# government sites only. Fetched by `python -m shipready.knowledge.fetch` and indexed in Postgres
+# with pgvector by `python -m shipready.knowledge.index` (Decision.md D-31).
 #
 # version: the edition the URL serves, as the document states it. DGFT amends the Handbook of
 #   Procedures chapter by chapter, so amended chapters are listed next to the full 2023 edition.
