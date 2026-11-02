@@ -31,6 +31,9 @@ class Reference(Protocol):
     def indian_port(self, code: str) -> bool | None:
         """Whether `code` is an Indian customs location; None without the port list."""
 
+    def hs_description(self, code: str) -> str | None:
+        """What the 8-digit `code` covers, from its chapter down; None for an unknown code."""
+
 
 class DbReference:
     """The reference tables loaded by `shipready.db.load`."""
@@ -67,6 +70,15 @@ class DbReference:
             .limit(1)
         ).first()
         return (row.rate_inr, row.unit) if row else None
+
+    def hs_description(self, code: str) -> str | None:
+        if self.session.get(RefItcHs, code) is None:
+            return None
+        # A tariff item often reads only "Other": its chapter, heading and subheading say what.
+        levels = [code[:2], code[:4], code[:6], code]
+        rows = self.session.scalars(select(RefItcHs).where(RefItcHs.code.in_(levels)))
+        found = {row.code: row.description for row in rows}
+        return "; ".join(found[level] for level in levels if level in found)
 
     def indian_port(self, code: str) -> bool | None:
         if not self.session.scalar(select(exists().where(RefPort.code.is_not(None)))):

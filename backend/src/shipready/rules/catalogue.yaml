@@ -156,6 +156,10 @@
   severity: major
   prevents: Misclassification query
   source: WCO General Rules for the Interpretation of the Harmonized System
+  params:
+    # The judge's confidence needed to report a conflict; below it, not verified. Set on the
+    # dev split (Decision.md D-31).
+    judge_min_confidence: 0.7
 
 - id: POL-01
   title: Export policy allows the goods
@@ -181,6 +185,10 @@
   severity: major
   prevents: Mismatch query
   source: Customs Act 1962, Section 50; UCP 600 Article 14(d) (data need not be identical but must not conflict)
+  params:
+    # The judge's confidence needed to report a conflict; below it, not verified. Set on the
+    # dev split (Decision.md D-31).
+    judge_min_confidence: 0.7
 
 - id: UQC-01
   title: Unit of quantity valid and consistent
@@ -223,6 +231,10 @@
   severity: major
   prevents: Query
   source: CGST Rules 2017, Rule 46 (supplier name and address on the invoice); Customs Act 1962, Section 50
+  params:
+    # The judge's confidence needed to report a conflict; below it, not verified. Set on the
+    # dev split (Decision.md D-31).
+    judge_min_confidence: 0.7
 
 - id: PTY-02
   title: Consignee consistent
@@ -231,6 +243,10 @@
   severity: major
   prevents: Bill of lading amendment or certificate of origin rejection
   source: CGST Rules 2017, Rule 46 (recipient name and delivery address on the invoice)
+  params:
+    # The judge's confidence needed to report a conflict; below it, not verified. Set on the
+    # dev split (Decision.md D-31).
+    judge_min_confidence: 0.7
 
 - id: PTY-03
   title: Notify party on a to-order bill of lading
@@ -257,6 +273,10 @@
   severity: blocker
   prevents: GST non-compliance
   source: CGST Rules 2017, Rule 46 (export invoice endorsement "supply meant for export on payment of IGST" or "under bond or letter of undertaking without payment of IGST")
+  params:
+    # The judge's confidence needed to report a conflict; below it, not verified. Set on the
+    # dev split (Decision.md D-31).
+    judge_min_confidence: 0.7
 
 - id: GST-02
   title: LUT valid for the invoice
@@ -317,6 +337,9 @@
   severity: major
   prevents: Loss of FTA benefit
   source: DGFT Certificate of Origin platform (coo.dgft.gov.in); rules of origin of the relevant trade agreement
+  # Deferred: the document model has no trade agreement or origin criterion, and ShipGen makes
+  # no preferential certificate to test it on (Decision.md D-31).
+  enabled: false
 
 - id: LC-01
   title: Documents comply with the letter of credit

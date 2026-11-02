@@ -127,6 +127,9 @@ class NoData:
     def indian_port(self, code: str) -> bool | None:
         return None
 
+    def hs_description(self, code: str) -> str | None:
+        return None
+
 
 def test_without_reference_data_nothing_fails_for_lack_of_it() -> None:
     by_rule = outcomes(run_checks(clean_fields(), NoData()))
@@ -267,6 +270,9 @@ def test_database_reference(session: Session) -> None:
     assert reference.export_policy("85044090", date(2025, 6, 1)) == "Restricted"
     assert reference.export_policy("93011010", on) == "Prohibited"
     assert reference.export_policy("12345678", on) is None
+    assert reference.hs_description("93011010") == "Rocket launchers"
+    assert reference.hs_description("85044090") == "Transformers; Other"  # heading, then item
+    assert reference.hs_description("85044091") is None
     assert reference.indian_port("INNSA1") is True
     assert reference.indian_port("NLRTM") is False
     assert reference.exchange_rate("USD", date(2026, 10, 10)) == (Decimal("88.10"), 1)

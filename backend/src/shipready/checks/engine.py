@@ -22,11 +22,21 @@ CHECKS: dict[str, Check] = {**amounts.CHECKS, **shipping.CHECKS, **goods.CHECKS,
 
 
 @dataclass(frozen=True)
+class Citation:
+    """A passage of a regulatory text a finding relies on (shipready.knowledge)."""
+
+    source_id: str
+    page: int | None
+    text: str
+
+
+@dataclass(frozen=True)
 class Result:
     rule_id: str
     outcome: Outcome
     message: str  # what is wrong, or why it could not be decided; empty on a pass
     evidence: tuple[str, ...]  # field paths the check read, in order
+    citations: tuple[Citation, ...] = ()
 
 
 def deterministic_rules() -> list[RuleSpec]:

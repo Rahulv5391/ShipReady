@@ -128,5 +128,9 @@ class SnapshotReference:
         rate = max(rates, key=lambda r: r["valid_from"])
         return rate["rate_inr"], int(rate["unit"])
 
+    def hs_description(self, code: str) -> str | None:
+        row = load_itc_hs().get(code)
+        return f"{row['chapter']}; {row['description']}" if row else None
+
     def indian_port(self, code: str) -> bool | None:
         return any(port["code"] == code and port["country"] == "IN" for port in load_ports())

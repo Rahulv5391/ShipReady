@@ -27,7 +27,7 @@ def test_catalogue_has_every_check_from_the_plan() -> None:
 
 def test_only_the_deferred_checks_are_disabled() -> None:
     disabled = {rule.id for rule in load_catalogue() if not rule.enabled}
-    assert disabled == {"POL-02", "LC-01", "EML-01"}
+    assert disabled == {"POL-02", "COO-01", "LC-01", "EML-01"}  # COO-01: Decision.md D-31
 
 
 def test_weight_tolerance_is_a_parameter() -> None:
