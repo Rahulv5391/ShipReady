@@ -9,12 +9,13 @@ import pytest
 from evals import page_cache, pipeline
 from evals.__main__ import main
 from evals.answer_cache import CachedExtractor
-from evals.cases import flatten, load_cases
+from evals.cases import flatten, load_case, load_cases
 from evals.harness import baseline_of, regressions, run, write_report
 from evals.metrics import _f1, _normal, _percentile, meets, score_case, summarise
-from evals.pipeline import EmptyPipeline, Prediction
+from evals.pipeline import PIPELINES, EmptyPipeline, Prediction
 from shipgen.dataset import Case, write_dataset
 from shipgen.mutations import missing_documents
+from shipgen.reference import SnapshotReference
 from shipready.ai import RateLimited
 from shipready.extract import DocumentText, RawField
 from shipready.pages import Page
@@ -33,8 +34,7 @@ class TruthPipeline:
     name = "truth"
 
     def run(self, folder: Path, files: tuple[str, ...]) -> Prediction:
-        case = load_cases(folder.parent.parent, folder.parent.name)  # type: ignore[arg-type]
-        (this,) = [c for c in case if c.folder == folder]
+        this = load_case(folder)
         return Prediction(files=this.files, fields=this.fields, findings=this.findings)
 
 
@@ -87,7 +87,7 @@ def test_truth_pipeline_scores_perfectly(dataset: Path) -> None:
         "finding_precision",
     ):
         assert metrics[name] in (1.0, None), name
-    assert metrics["finding_recall"] == 1.0
+    assert metrics["finding_recall"] == metrics["det_recall"] == metrics["det_precision"] == 1.0
     assert metrics["false_alarms_per_clean"] in (0.0, None)
 
 
@@ -266,3 +266,23 @@ def test_a_spent_quota_stops_the_run_with_a_clear_message(
 
     with pytest.raises(RuntimeError, match=r"quota spent; it resets in 13\.1 h"):
         pipeline._patiently(spent)
+
+
+def test_checks_on_labels_find_the_planted_deterministic_errors(
+    dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ShipGen's own reference data, instead of the database's.
+    monkeypatch.setattr("evals.pipeline.make_engine", lambda: None)
+    monkeypatch.setattr("evals.pipeline.DbReference", lambda session: SnapshotReference())
+    metrics = run(PIPELINES["checks-on-labels"](), dataset, "dev").metrics
+    assert metrics["det_recall"] == metrics["det_precision"] == 1.0
+    assert metrics["false_alarms_per_clean"] in (0.0, None)
+    # The judgement rules (Phase 14) are not checked yet.
+    assert metrics["finding_recall"] is not None and metrics["finding_recall"] < 1.0
+
+
+def test_deterministic_measures_ignore_the_judgement_rules(dataset: Path) -> None:
+    case = load_cases(dataset, "dev")[0]
+    judged = Prediction(findings=frozenset({"HS-03", "DESC-01"}))
+    metrics = summarise([score_case(case, judged, 0.1)])
+    assert metrics["det_precision"] is None  # no deterministic rule reported

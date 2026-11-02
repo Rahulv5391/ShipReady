@@ -41,13 +41,13 @@ def load_cases(dataset: Path, split: Split) -> list[EvalCase]:
         raise FileNotFoundError(f"{manifest} not found; build the dataset with shipgen.dataset")
     entries = json.loads(manifest.read_text(encoding="utf-8"))["cases"]
     return [
-        _load(dataset / split / entry["shipment_id"])
+        load_case(dataset / split / entry["shipment_id"])
         for entry in entries
         if entry["split"] == split
     ]
 
 
-def _load(folder: Path) -> EvalCase:
+def load_case(folder: Path) -> EvalCase:
     bundle_path = folder / "bundle.json"
     if not bundle_path.is_file():
         raise FileNotFoundError(f"{bundle_path} not found; build the dataset without --labels-only")
@@ -92,3 +92,11 @@ def flatten(value: object, path: str) -> dict[str, object]:
 @cache
 def severities() -> dict[str, str]:
     return {rule.id: rule.severity for rule in load_catalogue()}
+
+
+@cache
+def deterministic() -> frozenset[str]:
+    """The enabled rules decided by code alone (Phase 13)."""
+    return frozenset(
+        rule.id for rule in load_catalogue() if rule.enabled and rule.check_type == "DET"
+    )

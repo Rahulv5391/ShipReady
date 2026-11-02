@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from evals.cases import EvalCase, Medium, severities
+from evals.cases import EvalCase, Medium, deterministic, severities
 from evals.pipeline import Prediction
 
 # Measure -> (direction, MVP target on synthetic data), from PLAN.md Section 16.
@@ -24,6 +24,9 @@ TARGETS: dict[str, tuple[str, float]] = {
     "finding_recall": (">=", 0.95),
     "blocker_recall": (">=", 0.98),
     "finding_precision": (">=", 0.90),
+    # The same, over the deterministic rules only, until the judgement rules exist (Phase 14).
+    "det_recall": (">=", 0.95),
+    "det_precision": (">=", 0.90),
     "false_alarms_per_clean": ("<=", 0.3),
     "latency_p50_s": ("<=", 90),
     "latency_p95_s": ("<=", 180),
@@ -100,6 +103,8 @@ def summarise(results: list[CaseResult]) -> dict[str, float | None]:
     reported = sum(len(r.reported) for r in results)
     blockers_found = sum(len(r.expected & r.reported & blockers) for r in results)
     blockers_expected = sum(len(r.expected & blockers) for r in results)
+    det = deterministic()
+    det_found = sum(len(r.expected & r.reported & det) for r in results)
     clean = [r for r in results if r.clean]
     matched = sum(r.lines_matched for r in results)
     latencies = sorted(r.latency_s for r in results)
@@ -121,6 +126,8 @@ def summarise(results: list[CaseResult]) -> dict[str, float | None]:
         "finding_recall": _ratio(found, expected),
         "blocker_recall": _ratio(blockers_found, blockers_expected),
         "finding_precision": _ratio(found, reported),
+        "det_recall": _ratio(det_found, sum(len(r.expected & det) for r in results)),
+        "det_precision": _ratio(det_found, sum(len(r.reported & det) for r in results)),
         "false_alarms_per_clean": (
             sum(len(r.reported) for r in clean) / len(clean) if clean else None
         ),

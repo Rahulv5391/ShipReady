@@ -7,13 +7,16 @@ A pipeline sees only the files, never case.json or bundle.json, which hold the a
 import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from functools import partial
 from pathlib import Path
 from typing import Protocol
 
+from sqlalchemy.orm import Session
+
 from evals.answer_cache import CachedExtractor
+from evals.cases import load_case
 from evals.page_cache import cached_pages
 from shipready.ai import (
     AiAnswer,
@@ -24,7 +27,10 @@ from shipready.ai import (
     extractor_from_env,
 )
 from shipready.api.uploads import media_type
+from shipready.checks.engine import run_checks
+from shipready.checks.reference import DbReference
 from shipready.classify import split_into_parts
+from shipready.db.session import make_engine
 from shipready.extract import DocumentText, FieldExtractor, RawField, extract_fields
 
 # Waits for a rate-limited or overloaded AI before the run gives up (a spent daily quota will
@@ -104,6 +110,27 @@ class ExtractPipeline:
         )
 
 
+class ChecksPipeline:
+    """Runs the deterministic checks (Phase 13) on fields: those `ExtractPipeline` reads from the
+    files, or, with `on_labels`, the dataset's labelled fields. The latter is the one pipeline
+    that reads the answers (case.json): it measures the rules alone, apart from extraction."""
+
+    def __init__(self, on_labels: bool) -> None:
+        self.name = "checks-on-labels" if on_labels else "checks"
+        self.extract = None if on_labels else ExtractPipeline()
+        self.session = Session(make_engine())
+        self.reference = DbReference(self.session)
+
+    def run(self, folder: Path, files: tuple[str, ...]) -> Prediction:
+        if self.extract is None:
+            read = Prediction(fields=load_case(folder).fields)
+        else:
+            read = self.extract.run(folder, files)
+        results = run_checks(read.fields, self.reference)
+        failed = frozenset(r.rule_id for r in results if r.outcome == "fail")
+        return replace(read, findings=failed)
+
+
 def read_documents(
     folder: Path, files: tuple[str, ...], mode: AiMode, ai: PageClassifier | None
 ) -> tuple[dict[str, tuple[str, ...]], list[DocumentText]]:
@@ -168,4 +195,6 @@ PIPELINES: dict[str, Callable[[], Pipeline]] = {
     "rules+ai": partial(ClassifyPipeline, "fallback"),
     "ai": partial(ClassifyPipeline, "always"),
     "extract": ExtractPipeline,
+    "checks": partial(ChecksPipeline, on_labels=False),
+    "checks-on-labels": partial(ChecksPipeline, on_labels=True),
 }

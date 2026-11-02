@@ -1082,7 +1082,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - Pydantic schemas per document type with evidence; extraction with Structured Outputs; normalisation of extracted values; evidence locator (quote → box). Built with one request per shipment on Gemini's free tier until the OpenAI key arrives (Decision.md D-28).
 - *Exit:* field extraction ≥ 90% on the synthetic validation split; evidence boxes working.
 
-**Phase 12: Re-reader and model benchmark**
+**Phase 12: Re-reader and model benchmark** (postponed until after Phase 13: the benchmark needs the OpenAI key, and re-reads would spend the free Gemini quota the Phase 11 evaluation needs; Decision.md D-29)
 - Targeted re-read for missing or low-confidence fields; benchmark Sol vs Astra vs Luna; cost per shipment measured.
 - *Exit:* default models chosen and recorded with their numbers.
 
