@@ -39,7 +39,10 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 def workbook() -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("xl/workbook.xml", "<workbook/>")
+        # A fixed date: by default a zip entry carries the current time, so two calls a moment
+        # apart could give different bytes.
+        entry = zipfile.ZipInfo("xl/workbook.xml", date_time=(2026, 1, 1, 0, 0, 0))
+        archive.writestr(entry, "<workbook/>")
     return buffer.getvalue()
 
 
@@ -518,6 +521,14 @@ def test_checks_are_listed_failures_first_with_their_evidence(
             ),
             CheckResult(
                 shipment_id=uuid.UUID(shipment_id),
+                rule_id="DOC-01",
+                outcome="fail",
+                message="missing: shipping bill",
+                evidence=[],
+                citations=[{"source_id": "ftp-2023", "page": 26, "text": "Shipping Bill"}],
+            ),
+            CheckResult(
+                shipment_id=uuid.UUID(shipment_id),
                 rule_id="FX-01",
                 outcome="not_verified",
                 message="no customs export rate for USD on 2026-10-29 in our data",
@@ -529,11 +540,16 @@ def test_checks_are_listed_failures_first_with_their_evidence(
 
     checks = client.get(f"/api/v1/shipments/{shipment_id}/checks", headers=headers()).json()
     assert [(c["rule_id"], c["outcome"]) for c in checks] == [
+        ("DOC-01", "fail"),
         ("INV-01", "fail"),
         ("FX-01", "not_verified"),
         ("ID-01", "pass"),
     ]
-    failed = checks[0]
+    (citation,) = checks[0]["citations"]
+    assert (citation["title"], citation["page"]) == ("Foreign Trade Policy 2023", 26)
+    assert citation["url"].startswith("https://content.dgft.gov.in/")
+    failed = checks[1]
+    assert failed["citations"] == []
     assert (failed["title"], failed["severity"]) == (
         "Invoice number and date match the shipping bill",
         "blocker",

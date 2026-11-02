@@ -1093,7 +1093,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - *Exit:* DET-rule recall and precision measured on validation; no finding raised only because a code is absent from reference data.
 
 **Phase 14: Semantic checks and compliance agent**
-- Decisions API checks (HS-03, DESC-01, PTY-01, PTY-02) with calibrated thresholds; compliance agent with retrieval over the regulatory texts collected in Phase 8 (OpenAI File Search or pgvector, decided here) for DOC-01, COO-01, GST-01.
+- Decisions API checks (HS-03, DESC-01, PTY-01, PTY-02) with calibrated thresholds; compliance agent with retrieval over the regulatory texts collected in Phase 8 (OpenAI File Search or pgvector, decided here) for DOC-01, COO-01, GST-01. Built with pgvector and a Gemini judge until the OpenAI key arrives; COO-01 moved to the stretch list (Decision.md D-31).
 - *Exit:* overall finding recall ≥ 90% and precision ≥ 85% on validation.
 
 **Phase 15: Verification and readiness score**
@@ -1126,7 +1126,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - *Exit:* showcase material delivered.
 
 ### Stretch
-- Real anonymised bundles (Section 15.4), deferred checks (POL-02, LC-01, EML-01), email sending, analytics, multi-tenant roles.
+- Real anonymised bundles (Section 15.4), deferred checks (POL-02, COO-01, LC-01, EML-01), email sending, analytics, multi-tenant roles.
 
 ---
 

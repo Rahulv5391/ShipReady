@@ -1,13 +1,13 @@
 """The background worker: reads each uploaded file's pages and splits it into documents, then,
 once every file of a shipment is read, reads the shipment's fields with their evidence and runs
-the deterministic checks on them.
+the checks on them.
 
     uv run --env-file .env celery -A shipready.worker worker --pool=solo --loglevel=info
     uv run --env-file .env python -m shipready.worker requeue    # queue files still "uploaded"
 
 The API queues `process_document` after an upload; that queues `extract_shipment` when it read
-the shipment's last waiting file. Each run replaces what an earlier run wrote, so running a task
-again (a retry, a requeue) is safe.
+the shipment's last waiting file, which queues `check_shipment`. Each run replaces what an
+earlier run wrote, so running a task again (a retry, a requeue) is safe.
 """
 
 import argparse
@@ -24,14 +24,19 @@ from sqlalchemy import Engine, delete, select
 from sqlalchemy.orm import Session
 
 from shipready.ai import (
+    Embedder,
+    Judge,
     PageClassifier,
     RateLimited,
     ai_mode,
     classifier_from_env,
+    embedder_from_env,
     extractor_from_env,
+    judge_from_env,
 )
 from shipready.checks.engine import run_checks
 from shipready.checks.reference import DbReference
+from shipready.checks.semantic import DbKnowledge, run_semantic_checks
 from shipready.classify import split_into_parts
 from shipready.db.models import (
     CheckResult,
@@ -81,7 +86,16 @@ def extract_shipment(self: Any, shipment_id: str) -> None:
         extract(_engine(), _extractor(), uuid.UUID(shipment_id))
     except RateLimited as error:
         raise self.retry(countdown=error.retry_after) from error
-    check(_engine(), uuid.UUID(shipment_id))
+    check_shipment.delay(shipment_id)
+
+
+# Apart from extraction, so a judge that is rate limited retries the checks only.
+@app.task(name="shipready.worker.check_shipment", bind=True, max_retries=8)  # type: ignore[untyped-decorator]
+def check_shipment(self: Any, shipment_id: str) -> None:
+    try:
+        check(_engine(), _judge(), _embedder(), uuid.UUID(shipment_id))
+    except RateLimited as error:
+        raise self.retry(countdown=error.retry_after) from error
 
 
 def process(
@@ -161,9 +175,9 @@ def extract(engine: Engine, extractor: FieldExtractor, shipment_id: uuid.UUID) -
             raise
 
 
-def check(engine: Engine, shipment_id: uuid.UUID) -> None:
-    """Run the deterministic checks on the shipment's extracted fields and store each result,
-    replacing those of an earlier run."""
+def check(engine: Engine, judge: Judge, embedder: Embedder, shipment_id: uuid.UUID) -> None:
+    """Run every check, deterministic and semantic, on the shipment's extracted fields and
+    store each result, replacing those of an earlier run."""
     with Session(engine) as session:
         shipment = session.get(Shipment, shipment_id)
         if shipment is None:
@@ -176,7 +190,10 @@ def check(engine: Engine, shipment_id: uuid.UUID) -> None:
                 )
             )
             values = {path: value for path, value in rows}
-            results = run_checks(values, DbReference(session))
+            reference = DbReference(session)
+            results = run_checks(values, reference) + run_semantic_checks(
+                values, reference, judge, DbKnowledge(session, embedder)
+            )
             session.execute(delete(CheckResult).where(CheckResult.shipment_id == shipment_id))
             session.add_all(
                 CheckResult(
@@ -185,11 +202,15 @@ def check(engine: Engine, shipment_id: uuid.UUID) -> None:
                     outcome=result.outcome,
                     message=result.message,
                     evidence=list(result.evidence),
+                    citations=[asdict(citation) for citation in result.citations],
                 )
                 for result in results
             )
             shipment.status, shipment.error = "CHECKED", None
             session.commit()
+        except RateLimited:
+            session.rollback()
+            raise
         except Exception as error:
             _failed(session, shipment, error, "checking")
             raise
@@ -275,6 +296,16 @@ def _classifier() -> PageClassifier | None:
 @cache
 def _extractor() -> FieldExtractor:
     return extractor_from_env()
+
+
+@cache
+def _judge() -> Judge:
+    return judge_from_env()
+
+
+@cache
+def _embedder() -> Embedder:
+    return embedder_from_env()
 
 
 def requeue(engine: Engine) -> int:

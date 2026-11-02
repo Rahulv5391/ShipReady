@@ -15,20 +15,26 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from evals.answer_cache import CachedExtractor
+from evals.answer_cache import CachedExtractor, CachedJudge
 from evals.cases import load_case
 from evals.page_cache import cached_pages
 from shipready.ai import (
     AiAnswer,
     AiMode,
     GeminiClassifier,
+    Judge,
     PageClassifier,
+    Question,
     RateLimited,
+    Verdict,
+    embedder_from_env,
     extractor_from_env,
+    judge_from_env,
 )
 from shipready.api.uploads import media_type
 from shipready.checks.engine import run_checks
 from shipready.checks.reference import DbReference
+from shipready.checks.semantic import DbKnowledge, run_semantic_checks
 from shipready.classify import split_into_parts
 from shipready.db.session import make_engine
 from shipready.extract import DocumentText, FieldExtractor, RawField, extract_fields
@@ -111,22 +117,31 @@ class ExtractPipeline:
 
 
 class ChecksPipeline:
-    """Runs the deterministic checks (Phase 13) on fields: those `ExtractPipeline` reads from the
-    files, or, with `on_labels`, the dataset's labelled fields. The latter is the one pipeline
-    that reads the answers (case.json): it measures the rules alone, apart from extraction."""
+    """Runs every check, deterministic (Phase 13) and semantic (Phase 14), on fields: those
+    `ExtractPipeline` reads from the files, or, with `on_labels`, the dataset's labelled fields.
+    The latter is the one pipeline that reads the answers (case.json): it measures the checks
+    apart from extraction. The judge's answers are cached like extraction's."""
 
     def __init__(self, on_labels: bool) -> None:
         self.name = "checks-on-labels" if on_labels else "checks"
         self.extract = None if on_labels else ExtractPipeline()
         self.session = Session(make_engine())
         self.reference = DbReference(self.session)
+        try:
+            judge, embedder = judge_from_env(), embedder_from_env()
+        except RuntimeError as error:
+            raise ValueError(str(error)) from error
+        self.judge = CachedJudge(_PatientJudge(judge), ANSWER_CACHE)
+        self.knowledge = DbKnowledge(self.session, embedder)
 
     def run(self, folder: Path, files: tuple[str, ...]) -> Prediction:
         if self.extract is None:
             read = Prediction(fields=load_case(folder).fields)
         else:
             read = self.extract.run(folder, files)
-        results = run_checks(read.fields, self.reference)
+        results = run_checks(read.fields, self.reference) + run_semantic_checks(
+            read.fields, self.reference, self.judge, self.knowledge
+        )
         failed = frozenset(r.rule_id for r in results if r.outcome == "fail")
         return replace(read, findings=failed)
 
@@ -178,6 +193,15 @@ class _PatientClassifier:
 
     def classify(self, page_text: str) -> AiAnswer:
         return _patiently(lambda: self.ai.classify(page_text))
+
+
+class _PatientJudge:
+    def __init__(self, judge: Judge) -> None:
+        self.inner = judge
+        self.model = judge.model
+
+    def judge(self, questions: list[Question]) -> list[Verdict]:
+        return _patiently(lambda: self.inner.judge(questions))
 
 
 class _PatientExtractor:

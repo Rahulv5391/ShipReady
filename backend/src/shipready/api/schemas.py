@@ -49,6 +49,16 @@ class FieldOut(BaseModel):
     model: str
 
 
+class CitationOut(BaseModel):
+    """A passage of a regulatory text a result relies on."""
+
+    source_id: str
+    title: str
+    url: str
+    page: int | None
+    text: str
+
+
 class CheckOut(BaseModel):
     """A check's outcome on the shipment: pass, fail, or not verified when a value it needs is
     missing or our reference data cannot decide it."""
@@ -59,6 +69,7 @@ class CheckOut(BaseModel):
     outcome: str
     message: str
     evidence: list[FieldOut]
+    citations: list[CitationOut]
 
 
 class DocumentPartOut(BaseModel):

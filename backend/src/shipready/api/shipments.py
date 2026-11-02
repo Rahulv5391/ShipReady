@@ -2,7 +2,7 @@
 
 import uuid
 from functools import cache
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
@@ -13,6 +13,7 @@ from shipready.api.deps import PrincipalDep, SessionDep
 from shipready.api.schemas import (
     BoxOut,
     CheckOut,
+    CitationOut,
     DocumentOut,
     FieldOut,
     ShipmentCreate,
@@ -26,6 +27,7 @@ from shipready.db.models import (
     ExtractedField,
     Shipment,
 )
+from shipready.knowledge.sources import Source, load_sources
 from shipready.rules.catalogue import RuleSpec, load_catalogue
 
 router = APIRouter(prefix="/shipments", tags=["shipments"])
@@ -108,6 +110,7 @@ def list_checks(
             outcome=result.outcome,
             message=result.message,
             evidence=[fields[path] for path in result.evidence if path in fields],
+            citations=[_citation(c) for c in result.citations],
         )
         for result in results
     ]
@@ -117,6 +120,16 @@ def list_checks(
 @cache
 def _catalogue() -> list[RuleSpec]:
     return load_catalogue()
+
+
+@cache
+def _sources() -> dict[str, Source]:
+    return {source.id: source for source in load_sources()}
+
+
+def _citation(stored: dict[str, Any]) -> CitationOut:
+    source = _sources()[stored["source_id"]]
+    return CitationOut(title=source.title, url=source.url, **stored)
 
 
 def _fields_of(session: Session, shipment_id: uuid.UUID) -> dict[str, FieldOut]:

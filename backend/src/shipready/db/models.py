@@ -11,10 +11,12 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     SmallInteger,
     String,
@@ -166,6 +168,8 @@ TEXT_SOURCES = ("pdf_text", "ocr", "cells")  # the PDF's own text, OCR of an ima
 # How a part's type was decided: its title, following a titled page, the AI, or not at all
 # (no title and AI switched off; the part is "other").
 PART_DECISIONS = ("title", "follows", "ai", "none")
+# Size of the regulatory passages' embeddings (shipready.knowledge.index).
+EMBEDDING_DIMENSIONS = 768
 # A check's outcome (shipready.checks.engine): not verified when a value it needs is missing or
 # our reference data cannot decide it.
 CHECK_OUTCOMES = ("pass", "fail", "not_verified")
@@ -318,3 +322,33 @@ class CheckResult(Base):
     outcome: Mapped[str] = mapped_column(String(12))
     message: Mapped[str] = mapped_column(Text)
     evidence: Mapped[list[str]] = mapped_column(JSONB)  # paths into extracted_fields
+    # Passages of the regulatory texts the result relies on: [{"source_id", "page", "text"}].
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list, server_default="[]"
+    )
+
+
+class KnowledgeChunk(Base):
+    """A passage of a regulatory text (shipready.knowledge.sources) with its embedding, for the
+    compliance checks to cite. A source's passages are replaced when its file changes."""
+
+    __tablename__ = "knowledge_chunks"
+    __table_args__ = (
+        UniqueConstraint("source_id", "chunk_no", name="chunk_unique"),
+        # Nearest passages by cosine distance without scanning them all.
+        Index(
+            "ix_knowledge_chunks_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(64), index=True)
+    source_sha256: Mapped[str] = mapped_column(String(64))  # of the file the passage came from
+    chunk_no: Mapped[int]  # order within the source, from 0
+    page: Mapped[int | None]  # from 1; None for a web page
+    text: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
+    model: Mapped[str] = mapped_column(Text)

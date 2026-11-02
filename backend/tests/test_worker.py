@@ -13,15 +13,18 @@ from shipgen.documents import build_documents
 from shipgen.generator import generate_shipment
 from shipgen.render.sheets import render_pdf
 from shipready import worker
-from shipready.ai import AiAnswer, RateLimited
+from shipready.ai import AiAnswer, Question, RateLimited, Verdict
 from shipready.checks.engine import deterministic_rules
+from shipready.checks.semantic import semantic_rules
 from shipready.db.models import (
+    EMBEDDING_DIMENSIONS,
     CheckResult,
     Document,
     DocumentPage,
     DocumentPart,
     ExtractedField,
     Organization,
+    RefItcHs,
     Shipment,
 )
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
@@ -295,6 +298,30 @@ def test_reading_the_last_file_queues_extraction(monkeypatch: pytest.MonkeyPatch
     assert queued == [str(shipment_id)]
 
 
+class AgreeingJudge:
+    model = "agreeing"
+
+    def judge(self, questions: list[Question]) -> list[Verdict]:
+        return [Verdict(q.id, True, 1.0, "") for q in questions]
+
+
+class FlatEmbedder:
+    model = "flat"
+
+    def embed(self, texts: list[str], query: bool) -> list[list[float]]:
+        return [[1.0] * EMBEDDING_DIMENSIONS for _ in texts]
+
+
+class DescribedInvoice(FakeExtractor):
+    """An invoice line with a description and HS code, so the judge is asked about it."""
+
+    def extract(self, documents: list[DocumentText], guide: str) -> list[RawField]:
+        return [
+            RawField(1, "lines[0].description", "Black tea", "Black tea", 1),
+            RawField(1, "lines[0].hs_code", "09024020", "0902 40 20", 1),
+        ]
+
+
 class MismatchedQuantities(FakeExtractor):
     """The invoice and the packing list give different quantities for their first line."""
 
@@ -312,14 +339,14 @@ def test_checks_run_on_the_extracted_fields(
 ) -> None:
     shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
     worker.extract(engine_of, MismatchedQuantities(), shipment_id)
-    worker.check(engine_of, shipment_id)
-    worker.check(engine_of, shipment_id)  # replaces the results
+    worker.check(engine_of, AgreeingJudge(), FlatEmbedder(), shipment_id)
+    worker.check(engine_of, AgreeingJudge(), FlatEmbedder(), shipment_id)  # replaces them
 
     session.expire_all()
     shipment = session.get(Shipment, shipment_id)
     assert shipment is not None and (shipment.status, shipment.error) == ("CHECKED", None)
     results = {r.rule_id: r for r in session.scalars(select(CheckResult))}
-    assert set(results) == {rule.id for rule in deterministic_rules()}
+    assert set(results) == {r.id for r in (*deterministic_rules(), *semantic_rules())}
     quantities = results["QTY-01"]
     assert quantities.outcome == "fail"
     assert quantities.message == "line 1: invoice 10 PCS, packing_list 12 PCS"
@@ -329,9 +356,12 @@ def test_checks_run_on_the_extracted_fields(
         "packing_list.lines[0].quantity",
         "packing_list.lines[0].uqc",
     ]
-    # The invoice and packing list show few of their mandatory fields (DOC-02); every other
-    # check lacks values and cannot be decided, and none fails for that.
-    assert {id_ for id_, r in results.items() if r.outcome == "fail"} == {"QTY-01", "DOC-02"}
+    # Only an invoice and a packing list were read: the shipping bill and transport document are
+    # missing (DOC-01), the invoice has no LUT statement (GST-01) and both show few of their
+    # mandatory fields (DOC-02). Every other check lacks values, and none fails for that.
+    failed = {id_ for id_, r in results.items() if r.outcome == "fail"}
+    assert failed == {"QTY-01", "DOC-02", "DOC-01", "GST-01"}
+    assert results["DOC-01"].citations == []  # nothing indexed to cite
     assert results["DOC-02"].message.startswith("missing: commercial_invoice.")
 
 
@@ -345,7 +375,7 @@ def test_a_failed_check_run_is_recorded(
 
     monkeypatch.setattr(worker, "run_checks", broken)
     with pytest.raises(RuntimeError):
-        worker.check(engine_of, shipment_id)
+        worker.check(engine_of, AgreeingJudge(), FlatEmbedder(), shipment_id)
     session.expire_all()
     shipment = session.get(Shipment, shipment_id)
     assert shipment is not None
@@ -353,12 +383,52 @@ def test_a_failed_check_run_is_recorded(
     assert session.scalar(select(func.count()).select_from(CheckResult)) == 0
 
 
-def test_extraction_task_then_checks(monkeypatch: pytest.MonkeyPatch) -> None:
-    shipment_id = uuid.uuid4()
+def test_extraction_task_queues_the_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    shipment_id = str(uuid.uuid4())
     calls: list[str] = []
     monkeypatch.setattr(worker, "_engine", lambda: None)
     monkeypatch.setattr(worker, "_extractor", lambda: None)
     monkeypatch.setattr(worker, "extract", lambda *args: calls.append("extract"))
-    monkeypatch.setattr(worker, "check", lambda *args: calls.append("check"))
-    worker.extract_shipment.run(str(shipment_id))
-    assert calls == ["extract", "check"]
+    monkeypatch.setattr(worker.check_shipment, "delay", lambda id_: calls.append(f"queue {id_}"))
+    worker.extract_shipment.run(shipment_id)
+    assert calls == ["extract", f"queue {shipment_id}"]
+
+
+def test_a_rate_limited_judge_retries_the_checks_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    def limited(*args: object) -> None:
+        raise RateLimited(25)
+
+    retries: list[float] = []
+
+    def retry(countdown: float) -> Exception:
+        retries.append(countdown)
+        return RuntimeError("retry scheduled")
+
+    for name in ("_engine", "_judge", "_embedder"):
+        monkeypatch.setattr(worker, name, lambda: None)
+    monkeypatch.setattr(worker, "check", limited)
+    monkeypatch.setattr(worker.check_shipment, "retry", retry)
+    with pytest.raises(RuntimeError, match="retry scheduled"):
+        worker.check_shipment.run(str(uuid.uuid4()))
+    assert retries == [25]
+
+
+class LimitedJudge:
+    model = "limited"
+
+    def judge(self, questions: list[Question]) -> list[Verdict]:
+        raise RateLimited(25)
+
+
+def test_a_rate_limited_check_leaves_no_error(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
+    session.add(RefItcHs(code="09024020", level=8, description="Black tea"))
+    session.commit()
+    worker.extract(engine_of, DescribedInvoice(), shipment_id)
+    with pytest.raises(RateLimited):
+        worker.check(engine_of, LimitedJudge(), FlatEmbedder(), shipment_id)
+    session.expire_all()
+    shipment = session.get(Shipment, shipment_id)
+    assert shipment is not None and (shipment.status, shipment.error) == ("EXTRACTED", None)

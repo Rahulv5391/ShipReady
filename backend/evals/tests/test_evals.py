@@ -16,7 +16,7 @@ from evals.pipeline import PIPELINES, EmptyPipeline, Prediction
 from shipgen.dataset import Case, write_dataset
 from shipgen.mutations import missing_documents
 from shipgen.reference import SnapshotReference
-from shipready.ai import RateLimited
+from shipready.ai import Question, RateLimited, Verdict
 from shipready.extract import DocumentText, RawField
 from shipready.pages import Page
 
@@ -268,17 +268,37 @@ def test_a_spent_quota_stops_the_run_with_a_clear_message(
         pipeline._patiently(spent)
 
 
-def test_checks_on_labels_find_the_planted_deterministic_errors(
-    dataset: Path, monkeypatch: pytest.MonkeyPatch
+class AgreeingJudge:
+    model = "agreeing"
+
+    def judge(self, questions: list[Question]) -> list[Verdict]:
+        return [Verdict(q.id, True, 1.0, "") for q in questions]
+
+
+class NoCitations:
+    def cite(self, rule_id: str) -> None:
+        return None
+
+
+def test_checks_on_labels_find_the_planted_errors(
+    dataset: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # ShipGen's own reference data, instead of the database's.
+    # ShipGen's reference data instead of the database's; a judge that sees no conflict.
     monkeypatch.setattr("evals.pipeline.make_engine", lambda: None)
     monkeypatch.setattr("evals.pipeline.DbReference", lambda session: SnapshotReference())
-    metrics = run(PIPELINES["checks-on-labels"](), dataset, "dev").metrics
+    monkeypatch.setattr("evals.pipeline.judge_from_env", AgreeingJudge)
+    monkeypatch.setattr("evals.pipeline.embedder_from_env", lambda: None)
+    monkeypatch.setattr("evals.pipeline.DbKnowledge", lambda session, embedder: NoCitations())
+    monkeypatch.setattr("evals.pipeline.ANSWER_CACHE", tmp_path)
+    result = run(PIPELINES["checks-on-labels"](), dataset, "dev")
+    metrics = result.metrics
     assert metrics["det_recall"] == metrics["det_precision"] == 1.0
+    assert metrics["finding_precision"] == 1.0
     assert metrics["false_alarms_per_clean"] in (0.0, None)
-    # The judgement rules (Phase 14) are not checked yet.
-    assert metrics["finding_recall"] is not None and metrics["finding_recall"] < 1.0
+    # Everything code decides is found; only what the judge would have flagged is missed.
+    missed = {rule for r in result.results for rule in r.expected - r.reported}
+    assert missed <= {"HS-03", "DESC-01"}
+    assert any(tmp_path.glob("*.json"))  # the judge's answers were cached
 
 
 def test_deterministic_measures_ignore_the_judgement_rules(dataset: Path) -> None:
