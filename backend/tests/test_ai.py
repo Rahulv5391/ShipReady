@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from google.genai import errors
 
@@ -202,3 +203,10 @@ def test_embeddings_of_the_wrong_size_are_refused(monkeypatch: pytest.MonkeyPatc
     )
     with pytest.raises(ValueError, match="expected 1 embeddings of 768"):
         embedder.embed(["a"], query=False)
+
+
+def test_a_dropped_connection_is_waited_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    dropped, _ = gemini(monkeypatch, httpx.RemoteProtocolError("Server disconnected"))
+    with pytest.raises(ai.RateLimited) as raised:
+        dropped.classify("page")
+    assert raised.value.retry_after == ai.NETWORK_WAIT_S

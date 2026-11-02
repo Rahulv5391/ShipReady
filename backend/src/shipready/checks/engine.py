@@ -15,6 +15,7 @@ from shipready.checks.reference import Reference
 from shipready.rules.catalogue import RuleSpec, load_catalogue
 
 Outcome = Literal["pass", "fail", "not_verified"]
+Verification = Literal["kept", "misread"]
 OUTCOMES: tuple[Outcome, ...] = ("pass", "fail", "not_verified")
 Check = Callable[[Fields, Reference, dict[str, Any]], str | None]  # a problem, or None
 
@@ -37,6 +38,10 @@ class Result:
     message: str  # what is wrong, or why it could not be decided; empty on a pass
     evidence: tuple[str, ...]  # field paths the check read, in order
     citations: tuple[Citation, ...] = ()
+    # The critic's review of a failure (shipready.checks.critic): kept, or misread when the page
+    # images show the documents are right; None when not reviewed.
+    verification: Verification | None = None
+    critic_reason: str = ""
 
 
 def deterministic_rules() -> list[RuleSpec]:
