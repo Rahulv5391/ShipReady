@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from shipready.ai import (
     Critic,
+    Drafter,
     Embedder,
     Judge,
     PageClassifier,
@@ -33,12 +34,13 @@ from shipready.ai import (
     ai_mode,
     classifier_from_env,
     critic_from_env,
+    drafter_from_env,
     embedder_from_env,
     extractor_from_env,
     judge_from_env,
 )
 from shipready.checks.critic import crop_png, review
-from shipready.checks.engine import run_checks
+from shipready.checks.engine import Result, run_checks
 from shipready.checks.readiness import assess
 from shipready.checks.reference import DbReference
 from shipready.checks.semantic import DbKnowledge, run_semantic_checks
@@ -49,11 +51,15 @@ from shipready.db.models import (
     DocumentPage,
     DocumentPart,
     ExtractedField,
+    Message,
+    Organization,
     Shipment,
 )
 from shipready.db.session import make_engine
+from shipready.drafts import requests
 from shipready.extract import DocumentText, FieldExtractor, extract_fields
 from shipready.pages import Page, Word, read_pages, text_source
+from shipready.runs import active_run, await_review, current_run, enter_stage, finish, record
 from shipready.storage import Storage, make_storage, settings_from_env
 
 logger = logging.getLogger(__name__)
@@ -101,6 +107,15 @@ def check_shipment(self: Any, shipment_id: str) -> None:
         check(_engine(), _storage(), _judge(), _embedder(), _critic(), uuid.UUID(shipment_id))
     except RateLimited as error:
         raise self.retry(countdown=error.retry_after) from error
+    draft_shipment.delay(shipment_id)
+
+
+@app.task(name="shipready.worker.draft_shipment", bind=True, max_retries=8)  # type: ignore[untyped-decorator]
+def draft_shipment(self: Any, shipment_id: str) -> None:
+    try:
+        draft(_engine(), _drafter(), uuid.UUID(shipment_id))
+    except RateLimited as error:
+        raise self.retry(countdown=error.retry_after) from error
 
 
 def process(
@@ -124,17 +139,32 @@ def process(
                 session.add(_page_row(storage, document, page))
             session.add_all(DocumentPart(document_id=document.id, **asdict(part)) for part in parts)
             document.page_count, document.status = len(pages), "processed"
+            run = current_run(session, session.get_one(Shipment, document.shipment_id))
+            record(
+                session,
+                run,
+                "document_read",
+                file=document.filename,
+                pages=len(pages),
+                documents=[part.doc_type for part in parts],
+            )
+            ready = _all_read(session, document.shipment_id)
+            if ready:
+                enter_stage(session, run, "extracting")
             session.commit()
-            return document.shipment_id if _all_read(session, document.shipment_id) else None
-        except RateLimited:
+            return document.shipment_id if ready else None
+        except RateLimited as error:
             session.rollback()
             document.status = "uploaded"
+            _waiting(session, document.shipment_id, error)
             session.commit()
             raise
         except Exception as error:
             session.rollback()
             document.status = "failed"
             document.error = f"{type(error).__name__}: {error}"[:MAX_ERROR_CHARS]
+            failing = current_run(session, session.get_one(Shipment, document.shipment_id))
+            finish(session, failing, f"{document.filename} could not be read: {document.error}")
             session.commit()
             logger.exception("processing document %s failed", document_id)
             raise
@@ -171,9 +201,14 @@ def extract(engine: Engine, extractor: FieldExtractor, shipment_id: uuid.UUID) -
                 for field in fields
             )
             shipment.status, shipment.error = "EXTRACTED", None
+            run = current_run(session, shipment)
+            record(session, run, "fields_extracted", fields=len(fields))
+            enter_stage(session, run, "checking")
             session.commit()
-        except RateLimited:
+        except RateLimited as error:
             session.rollback()
+            _waiting(session, shipment_id, error)
+            session.commit()
             raise
         except Exception as error:
             _failed(session, shipment, error, "extracting")
@@ -226,13 +261,87 @@ def check(
             shipment.readiness = assessment.readiness
             shipment.readiness_score = assessment.score
             shipment.status, shipment.error = "CHECKED", None
+            run = current_run(session, shipment)
+            record(
+                session,
+                run,
+                "checks_done",
+                failed=[r.rule_id for r in results if r.outcome == "fail"],
+                not_verified=[r.rule_id for r in results if r.outcome == "not_verified"],
+                readiness=assessment.readiness,
+                score=str(assessment.score),
+            )
+            enter_stage(session, run, "drafting")
             session.commit()
-        except RateLimited:
+        except RateLimited as error:
             session.rollback()
+            _waiting(session, shipment_id, error)
+            session.commit()
             raise
         except Exception as error:
             _failed(session, shipment, error, "checking")
             raise
+
+
+def draft(engine: Engine, drafter: Drafter, shipment_id: uuid.UUID) -> None:
+    """Draft a message to each party that must fix a document, replacing the run's earlier
+    drafts, then leave the shipment for a person's review."""
+    with Session(engine) as session:
+        shipment = session.get(Shipment, shipment_id)
+        if shipment is None:
+            logger.warning("shipment %s no longer exists", shipment_id)
+            return
+        try:
+            rows = session.scalars(
+                select(CheckResult).where(CheckResult.shipment_id == shipment_id)
+            )
+            failed = [
+                Result(row.rule_id, "fail", row.message, tuple(row.evidence))
+                for row in rows
+                if row.outcome == "fail"
+            ]
+            asked = requests(failed)
+            drafts = (
+                drafter.draft(shipment.reference, _sender(session, shipment), asked)
+                if asked
+                else []
+            )
+            run = current_run(session, shipment)
+            session.execute(delete(Message).where(Message.run_id == run.id))
+            session.add_all(
+                Message(
+                    shipment_id=shipment_id,
+                    run_id=run.id,
+                    recipient=d.recipient,
+                    subject=d.subject,
+                    body=d.body,
+                    rule_ids=[p.rule_id for p in asked[d.recipient]],
+                )
+                for d in drafts
+            )
+            record(session, run, "messages_drafted", recipients=[d.recipient for d in drafts])
+            await_review(session, run, shipment)
+            shipment.error = None
+            session.commit()
+        except RateLimited as error:
+            session.rollback()
+            _waiting(session, shipment_id, error)
+            session.commit()
+            raise
+        except Exception as error:
+            _failed(session, shipment, error, "drafting")
+            raise
+
+
+def _sender(session: Session, shipment: Shipment) -> str:
+    """Whom the messages are from: the exporter named on the invoice, else the organisation."""
+    name = session.scalar(
+        select(ExtractedField.value).where(
+            ExtractedField.shipment_id == shipment.id,
+            ExtractedField.path == "commercial_invoice.exporter.name",
+        )
+    )
+    return name or session.get_one(Organization, shipment.org_id).name
 
 
 class DbEvidence:
@@ -268,11 +377,22 @@ class DbEvidence:
 
 
 def _failed(session: Session, shipment: Shipment, error: Exception, stage: str) -> None:
-    """Keep a short reason on the shipment, so the failure shows without reading logs."""
+    """Keep a short reason on the shipment and end its run, so the failure shows without
+    reading logs."""
     session.rollback()
     shipment.error = f"{type(error).__name__}: {error}"[:MAX_ERROR_CHARS]
+    run = active_run(session, shipment.id)
+    if run is not None:
+        finish(session, run, f"{stage} failed: {shipment.error}")
     session.commit()
     logger.exception("%s shipment %s failed", stage, shipment.id)
+
+
+def _waiting(session: Session, shipment_id: uuid.UUID, error: RateLimited) -> None:
+    """Tell the run's watchers the AI asked to wait; the task retries after it."""
+    run = active_run(session, shipment_id)
+    if run is not None:
+        record(session, run, "waiting", stage=run.stage, retry_after_s=error.retry_after)
 
 
 def _documents_of(
@@ -357,6 +477,11 @@ def _judge() -> Judge:
 @cache
 def _critic() -> Critic:
     return critic_from_env()
+
+
+@cache
+def _drafter() -> Drafter:
+    return drafter_from_env()
 
 
 @cache

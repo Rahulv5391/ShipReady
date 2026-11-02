@@ -13,7 +13,16 @@ from shipgen.documents import build_documents
 from shipgen.generator import generate_shipment
 from shipgen.render.sheets import render_pdf
 from shipready import worker
-from shipready.ai import AiAnswer, Question, RateLimited, Review, Suspect, Verdict
+from shipready.ai import (
+    AiAnswer,
+    Draft,
+    Problem,
+    Question,
+    RateLimited,
+    Review,
+    Suspect,
+    Verdict,
+)
 from shipready.checks.engine import deterministic_rules
 from shipready.checks.semantic import semantic_rules
 from shipready.db.models import (
@@ -23,8 +32,11 @@ from shipready.db.models import (
     DocumentPage,
     DocumentPart,
     ExtractedField,
+    Message,
     Organization,
     RefItcHs,
+    Run,
+    RunEvent,
     Shipment,
 )
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
@@ -476,3 +488,118 @@ def test_the_critic_sees_the_pages_and_its_verdict_is_kept(
     # The missing documents (DOC-01) still hold the shipment: they have nothing to misread.
     assert shipment is not None and shipment.readiness == "needs_fix"
     assert shipment.readiness_score is not None and 0 <= shipment.readiness_score < 100
+
+
+class ScriptedDrafter:
+    model = "scripted"
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.asked: list[dict[str, list[Problem]]] = []
+
+    def draft(self, shipment: str, sender: str, requests: dict[str, list[Problem]]) -> list[Draft]:
+        self.asked.append(requests)
+        if self.error is not None:
+            raise self.error
+        return [Draft(r, f"{shipment}: please correct", f"From {sender}") for r in requests]
+
+
+def run_events(session: Session) -> list[str]:
+    return list(session.scalars(select(RunEvent.type).order_by(RunEvent.id)))
+
+
+def checked_shipment(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> uuid.UUID:
+    shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
+    worker.extract(engine_of, MismatchedQuantities(), shipment_id)
+    worker.check(engine_of, storage, AgreeingJudge(), FlatEmbedder(), NoMisreads(), shipment_id)
+    return shipment_id
+
+
+def test_a_run_records_each_step_and_waits_for_review(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = checked_shipment(session, engine_of, storage, monkeypatch)
+    drafter = ScriptedDrafter()
+    worker.draft(engine_of, drafter, shipment_id)
+
+    session.expire_all()
+    (run,) = session.scalars(select(Run))
+    assert (run.trigger, run.status, run.stage) == ("upload", "awaiting_review", None)
+    assert run_events(session) == [
+        "run_started",
+        "document_read",
+        "stage_started",  # extracting
+        "fields_extracted",
+        "stage_started",  # checking
+        "checks_done",
+        "stage_started",  # drafting
+        "messages_drafted",
+        "awaiting_review",
+    ]
+    shipment = session.get_one(Shipment, shipment_id)
+    assert (shipment.status, shipment.error) == ("AWAITING_REVIEW", None)
+    # The packing list disagrees with the invoice, and documents are missing: one message to
+    # the exporter's team, who issue both, listing both problems.
+    messages = session.scalars(select(Message)).all()
+    assert [(m.recipient, m.status) for m in messages] == [("exporter", "draft")]
+    assert set(messages[0].rule_ids) >= {"QTY-01", "DOC-01"}
+    assert messages[0].subject == "JOB-1: please correct"
+    worker.draft(engine_of, drafter, shipment_id)  # again: the drafts are replaced
+    assert session.scalar(select(func.count()).select_from(Message)) == 1
+
+
+def test_nothing_failed_asks_the_drafter_nothing(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = checked_shipment(session, engine_of, storage, monkeypatch)
+    for row in session.scalars(select(CheckResult)):
+        row.outcome = "pass"
+    session.commit()
+    drafter = ScriptedDrafter()
+    worker.draft(engine_of, drafter, shipment_id)
+    assert drafter.asked == []
+    session.expire_all()
+    assert session.get_one(Shipment, shipment_id).status == "AWAITING_REVIEW"
+
+
+def test_a_failed_drafting_ends_the_run(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = checked_shipment(session, engine_of, storage, monkeypatch)
+    with pytest.raises(ValueError, match="unexpected AI answer"):
+        worker.draft(engine_of, ScriptedDrafter(ValueError("unexpected AI answer")), shipment_id)
+    session.expire_all()
+    (run,) = session.scalars(select(Run))
+    assert (run.status, run.error) == (
+        "failed",
+        "drafting failed: ValueError: unexpected AI answer",
+    )
+    assert run_events(session)[-1] == "run_failed"
+
+
+def test_a_rate_limited_drafter_tells_the_watchers(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = checked_shipment(session, engine_of, storage, monkeypatch)
+    with pytest.raises(RateLimited):
+        worker.draft(engine_of, ScriptedDrafter(RateLimited(30)), shipment_id)
+    session.expire_all()
+    waiting = session.scalars(select(RunEvent).order_by(RunEvent.id.desc())).first()
+    assert waiting is not None
+    assert (waiting.type, waiting.data) == ("waiting", {"stage": "drafting", "retry_after_s": 30})
+    assert session.get_one(Run, waiting.run_id).status == "running"
+
+
+def test_an_unreadable_file_fails_its_run(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLASSIFY_WITH_AI", "never")
+    document_id = stored_document(session, storage, b"%PDF-1.7 broken", "application/pdf")
+    with pytest.raises(Exception, match=r"(?i)pdf"):
+        worker.process(engine_of, storage, None, document_id)
+    session.expire_all()
+    (run,) = session.scalars(select(Run))
+    assert run.status == "failed" and run.error is not None
+    assert run.error.startswith("file could not be read:")

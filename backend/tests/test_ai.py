@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -210,3 +211,70 @@ def test_a_dropped_connection_is_waited_for(monkeypatch: pytest.MonkeyPatch) -> 
     with pytest.raises(ai.RateLimited) as raised:
         dropped.classify("page")
     assert raised.value.retry_after == ai.NETWORK_WAIT_S
+
+
+def drafted(*points: tuple[int, str], recipient: str = "forwarder", subject: str = "JOB-1") -> str:
+    """A drafter's answer for one recipient with the given points."""
+    return json.dumps(
+        {
+            "drafts": [
+                {
+                    "recipient": recipient,
+                    "subject": subject,
+                    "opening": "Please correct the bill of lading.",
+                    "points": [{"problem": n, "text": text} for n, text in points],
+                    "closing": "Regards, Export team",
+                }
+            ]
+        }
+    )
+
+
+def test_drafter_request_and_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    drafter = ai.GeminiDrafter("test-key")
+    calls: list[Any] = []
+
+    def generate_content(**request: Any) -> SimpleNamespace:
+        calls.append(request)
+        return SimpleNamespace(text=drafted((2, "Seals differ."), (1, "Gross weight differs.")))
+
+    monkeypatch.setattr(drafter.client.models, "generate_content", generate_content)
+    problems = [
+        ai.Problem("WT-01", "Gross weight consistent", "packing list 4839 kg, bill 4924 kg"),
+        ai.Problem("CNT-03", "Seal numbers consistent", "TF9962856, YF0261847"),
+    ]
+    (draft,) = drafter.draft("JOB-1", "Kata Impex Pvt Ltd", {"forwarder": problems})
+    assert draft == ai.Draft(
+        "forwarder",
+        "JOB-1",
+        "Please correct the bill of lading.\n\n"
+        "1. Gross weight differs.\n2. Seals differ.\n\n"
+        "Regards, Export team",
+    )
+    (request,) = calls
+    assert request["contents"].startswith("Shipment: JOB-1\nSender: Kata Impex Pvt Ltd\n")
+    assert (
+        '<recipient role="forwarder">\n1. Gross weight consistent: packing list'
+        in (request["contents"])
+    )
+    assert "\n2. Seal numbers consistent: TF9962856" in request["contents"]
+    schema = request["config"].response_schema
+    recipient = schema["properties"]["drafts"]["items"]["properties"]["recipient"]
+    assert recipient["enum"] == ["forwarder"]  # only the parties asked
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        drafted((1, "Gross weight differs.")),  # problem 2 left out
+        drafted((1, "a"), (2, "b"), (3, "c")),  # a problem that was not asked
+        drafted((1, "a"), (2, " ")),
+        drafted((1, "a"), (2, "b"), subject=" "),
+        drafted((1, "a"), (2, "b"), recipient="buyer"),
+        '{"drafts": []}',
+        "not json",
+    ],
+)
+def test_a_draft_that_leaves_out_a_problem_is_refused(text: str) -> None:
+    with pytest.raises(ValueError, match="unexpected AI answer"):
+        ai.parse_drafts(text, {"forwarder": 2})
