@@ -22,6 +22,7 @@ from shipready.api.uploads import (
     storage_key,
 )
 from shipready.db.models import Document
+from shipready.runs import current_run, enter_stage, record
 from shipready.storage import Storage
 
 router = APIRouter(tags=["documents"])
@@ -89,6 +90,9 @@ def upload_documents(
         session.add_all(document for document, _ in documents)
         # New files make earlier fields incomplete; extraction runs again once they are read.
         shipment.status = "RECEIVED"
+        run = current_run(session, shipment)
+        record(session, run, "files_uploaded", files=[d.filename for d, _ in documents])
+        enter_stage(session, run, "reading")
         session.commit()
     except Exception as error:
         session.rollback()

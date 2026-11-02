@@ -23,6 +23,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -162,7 +163,8 @@ class RefLocation(Base):
 ORGANIZATION_TYPES = ("exporter", "cha", "forwarder", "internal")
 TRANSPORT_MODES = ("sea", "air", "road", "rail", "courier")
 # Later phases add the remaining statuses of PLAN.md Section 10.2 (checked, verified, ...).
-SHIPMENT_STATUSES = ("RECEIVED", "EXTRACTED", "CHECKED")
+# Then awaiting a person's review (PLAN.md Section 10.2), who marks it ready or needing fixes.
+SHIPMENT_STATUSES = ("RECEIVED", "EXTRACTED", "CHECKED", "AWAITING_REVIEW", "READY", "NEEDS_FIX")
 DOCUMENT_STATUSES = ("uploaded", "processing", "processed", "failed")
 TEXT_SOURCES = ("pdf_text", "ocr", "cells")  # the PDF's own text, OCR of an image, Excel cells
 # How a part's type was decided: its title, following a titled page, the AI, or not at all
@@ -174,6 +176,15 @@ EMBEDDING_DIMENSIONS = 768
 # our reference data cannot decide it.
 CHECK_OUTCOMES = ("pass", "fail", "not_verified")
 READINESS = ("ready", "needs_fix", "needs_review")
+# A run processes a shipment, started by an upload or a person asking to check it again.
+RUN_TRIGGERS = ("upload", "recheck")
+RUN_STATUSES = ("running", "awaiting_review", "done", "failed")
+RUN_STAGES = ("reading", "extracting", "checking", "drafting")
+# Who fixes a document: the exporter's own team, the forwarder or carrier, the customs broker,
+# the buyer, or the body that certifies origin.
+RECIPIENTS = ("exporter", "forwarder", "customs_broker", "buyer", "certifier")
+MESSAGE_STATUSES = ("draft", "approved", "discarded")
+APPROVAL_ACTIONS = ("mark_ready", "mark_needs_fix", "approve_message", "discard_message")
 # The critic's review of a failure (shipready.checks.critic).
 VERIFICATIONS = ("kept", "misread")
 
@@ -367,3 +378,88 @@ class KnowledgeChunk(Base):
     text: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
     model: Mapped[str] = mapped_column(Text)
+
+
+class Run(Base):
+    """One processing of a shipment, from its files to a person's review. At most one is
+    running or awaiting review per shipment; files uploaded meanwhile join it."""
+
+    __tablename__ = "runs"
+    __table_args__ = (
+        CheckConstraint(_one_of("trigger", RUN_TRIGGERS), name="trigger_valid"),
+        CheckConstraint(_one_of("status", RUN_STATUSES), name="status_valid"),
+        CheckConstraint(f"stage IS NULL OR {_one_of('stage', RUN_STAGES)}", name="stage_valid"),
+        # One active run per shipment, even when two requests start one at the same moment.
+        Index(
+            "one_active_run",
+            "shipment_id",
+            unique=True,
+            postgresql_where=text("status IN ('running', 'awaiting_review')"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    shipment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("shipments.id", ondelete="CASCADE"), index=True
+    )
+    trigger: Mapped[str] = mapped_column(String(8))
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    stage: Mapped[str | None] = mapped_column(String(12))  # while running
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RunEvent(Base):
+    """A step of a run, in order: what the live progress stream sends."""
+
+    __tablename__ = "run_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)  # increasing: the stream's position
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
+    type: Mapped[str] = mapped_column(String(32))  # e.g. stage_started, document_read
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Message(Base):
+    """A drafted request to the party who must correct a document. Never sent by ShipReady:
+    a person approves it and sends it themselves (PLAN.md Phase 18, copy to clipboard)."""
+
+    __tablename__ = "messages"
+    __table_args__ = (
+        CheckConstraint(_one_of("recipient", RECIPIENTS), name="recipient_valid"),
+        CheckConstraint(_one_of("status", MESSAGE_STATUSES), name="status_valid"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    shipment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("shipments.id", ondelete="CASCADE"), index=True
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"))
+    recipient: Mapped[str] = mapped_column(String(16))
+    subject: Mapped[str] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text)
+    rule_ids: Mapped[list[str]] = mapped_column(JSONB)  # the failed checks it asks to fix
+    status: Mapped[str] = mapped_column(String(10), default="draft")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Approval(Base):
+    """A person's decision on a shipment: who, what, when and why. The record of human
+    actions; the system's own steps are its runs' events."""
+
+    __tablename__ = "approvals"
+    __table_args__ = (CheckConstraint(_one_of("action", APPROVAL_ACTIONS), name="action_valid"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    shipment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("shipments.id", ondelete="CASCADE"), index=True
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"))
+    action: Mapped[str] = mapped_column(String(16))
+    target_id: Mapped[uuid.UUID | None]  # the message approved or discarded
+    decided_by: Mapped[str] = mapped_column(Text)  # the token's user until logins (Phase 17)
+    reason: Mapped[str | None] = mapped_column(Text)  # required to override open blockers
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
