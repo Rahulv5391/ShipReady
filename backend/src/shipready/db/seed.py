@@ -21,7 +21,7 @@ from shipready.db.session import make_engine
 from shipready.reference.files import read_csv
 from shipready.rules.catalogue import load_catalogue
 
-# The showcase has one organisation; dev tokens are issued for it.
+# The showcase has one organisation; its people sign in to it (python -m shipready.users add).
 DEMO_ORG_ID = uuid.UUID("5a1e0000-0000-4000-8000-000000000001")
 DEMO_ORG = {"id": DEMO_ORG_ID, "name": "ShipReady Demo Exports", "type": "exporter"}
 

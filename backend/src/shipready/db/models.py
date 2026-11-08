@@ -198,6 +198,21 @@ class Organization(Base):
     type: Mapped[str] = mapped_column(String(16))
 
 
+class User(Base):
+    """A person who signs in, in one organisation (PLAN.md: one organisation, simple login)."""
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    email: Mapped[str] = mapped_column(String(254), unique=True)  # lowercase
+    name: Mapped[str] = mapped_column(Text)
+    password_hash: Mapped[str] = mapped_column(Text)  # shipready.passwords
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Shipment(Base):
     __tablename__ = "shipments"
     __table_args__ = (
@@ -460,6 +475,6 @@ class Approval(Base):
     run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"))
     action: Mapped[str] = mapped_column(String(16))
     target_id: Mapped[uuid.UUID | None]  # the message approved or discarded
-    decided_by: Mapped[str] = mapped_column(Text)  # the token's user until logins (Phase 17)
+    decided_by: Mapped[str] = mapped_column(Text)  # the signed-in user's email
     reason: Mapped[str | None] = mapped_column(Text)  # required to override open blockers
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

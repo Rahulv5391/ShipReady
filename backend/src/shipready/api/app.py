@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 
 from shipready.ai import ai_provider
-from shipready.api import documents, review, shipments
+from shipready.api import documents, login, review, shipments
 from shipready.api.auth import secret
 from shipready.db.session import make_engine
 from shipready.storage import make_storage, settings_from_env
@@ -38,6 +38,7 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    api.include_router(login.router)
     api.include_router(shipments.router)
     api.include_router(documents.router)
     api.include_router(review.router)

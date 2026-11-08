@@ -5,7 +5,7 @@ import time
 import uuid
 import zipfile
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
@@ -18,7 +18,8 @@ from moto import mock_aws
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from shipready.api import auth, documents, review, token, uploads
+from shipready import passwords, users
+from shipready.api import auth, documents, login, review, uploads
 from shipready.api.app import create_app
 from shipready.api.deps import get_enqueue, get_recheck, get_session, get_storage
 from shipready.db.models import (
@@ -31,6 +32,7 @@ from shipready.db.models import (
     Run,
     RunEvent,
     Shipment,
+    User,
 )
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
 from shipready.runs import await_review, current_run, finish, record
@@ -164,17 +166,6 @@ def test_short_secret_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(auth.SECRET_VARIABLE, "short")
     with pytest.raises(RuntimeError, match="at least 32 bytes"):
         auth.secret()
-
-
-def test_token_command_issues_a_valid_token(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setenv(auth.SECRET_VARIABLE, SECRET)
-    token.main(["--user", "rahul", "--hours", "2"])
-    principal = auth.verify(capsys.readouterr().out.strip(), SECRET)
-    assert principal == auth.Principal(user="rahul", org_id=DEMO_ORG_ID)
-    with pytest.raises(SystemExit):
-        token.main(["--hours", "0"])
 
 
 # --- shipments ---
@@ -871,3 +862,148 @@ def test_events_arrive_on_an_open_stream(
         "document_read",
         "run_failed",
     ]
+
+
+LOGIN_PASSWORD = "correct horse battery staple"
+
+
+@pytest.fixture
+def account(client: TestClient, session: Session) -> User:
+    """A user of the demo organisation (the client fixture creates the organisations)."""
+    return users.add_user(
+        session, DEMO_ORG_ID, " Rahul@DemoExports.in ", "Rahul Verma", LOGIN_PASSWORD
+    )
+
+
+def sign_in(client: TestClient, email: str, password: str, **extra: object) -> Any:
+    return client.post("/api/v1/auth/login", json={"email": email, "password": password, **extra})
+
+
+# --- users and sign-in ---
+
+
+def test_users_are_stored_lowercase_with_a_hash(account: User, session: Session) -> None:
+    stored = session.scalars(select(User)).one()
+    assert (stored.email, stored.name, stored.org_id) == (
+        "rahul@demoexports.in",
+        "Rahul Verma",
+        DEMO_ORG_ID,
+    )
+    assert passwords.check_password(LOGIN_PASSWORD, stored.password_hash)
+
+
+@pytest.mark.parametrize(
+    ("email", "name", "org", "password", "message"),
+    [
+        ("RAHUL@demoexports.in", "Rahul", DEMO_ORG_ID, LOGIN_PASSWORD, "already has an account"),
+        ("not-an-email", "Rahul", DEMO_ORG_ID, LOGIN_PASSWORD, "is not an email address"),
+        ("a@b", "Rahul", DEMO_ORG_ID, LOGIN_PASSWORD, "is not an email address"),
+        ("new@demoexports.in", " ", DEMO_ORG_ID, LOGIN_PASSWORD, "needs a name"),
+        ("new@demoexports.in", "New", DEMO_ORG_ID, "short", "at least 12"),
+    ],
+)
+def test_bad_users_are_refused(
+    account: User,
+    session: Session,
+    email: str,
+    name: str,
+    org: uuid.UUID,
+    password: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        users.add_user(session, org, email, name, password)
+
+
+def test_a_user_needs_a_known_organisation(client: TestClient, session: Session) -> None:
+    with pytest.raises(ValueError, match="no organisation"):
+        users.add_user(session, uuid.uuid4(), "x@y.in", "X", LOGIN_PASSWORD)
+
+
+def test_the_command_reads_the_password_from_stdin(
+    client: TestClient,
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(users, "make_engine", lambda: session.get_bind())
+    monkeypatch.setattr("sys.stdin", io.StringIO(LOGIN_PASSWORD + "\n"))
+    users.main(["add", "--email", "ops@demoexports.in", "--name", "Ops", "--password-stdin"])
+    assert "added ops@demoexports.in" in capsys.readouterr().out
+    stored = users.find_user(session, "OPS@demoexports.in")
+    assert stored is not None and passwords.check_password(LOGIN_PASSWORD, stored.password_hash)
+
+
+# --- sign-in ---
+
+
+def test_sign_in_gives_a_token_the_api_accepts(client: TestClient, account: User) -> None:
+    response = sign_in(client, "RAHUL@demoexports.in", LOGIN_PASSWORD)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["user"] == {
+        "email": "rahul@demoexports.in",
+        "name": "Rahul Verma",
+        "org_id": str(DEMO_ORG_ID),
+    }
+    assert body["token_type"] == "bearer"
+    principal = auth.verify(body["access_token"], SECRET)
+    assert principal == auth.Principal(user="rahul@demoexports.in", org_id=DEMO_ORG_ID)
+    headers = {"Authorization": f"Bearer {body['access_token']}"}
+    assert client.get("/api/v1/shipments", headers=headers).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("remember", "lifetime"),
+    [(False, login.SESSION_LIFETIME), (True, login.REMEMBERED_LIFETIME)],
+)
+def test_keep_me_signed_in_sets_how_long_the_token_lasts(
+    client: TestClient, account: User, remember: bool, lifetime: timedelta
+) -> None:
+    body = sign_in(client, account.email, LOGIN_PASSWORD, remember=remember).json()
+    expires = datetime.fromisoformat(body["expires_at"])
+    assert abs(expires - (datetime.now(UTC) + lifetime)) < timedelta(minutes=1)
+
+
+@pytest.mark.parametrize(
+    ("email", "password"),
+    [
+        ("rahul@demoexports.in", "wrong password entirely"),
+        ("nobody@demoexports.in", LOGIN_PASSWORD),
+    ],
+)
+def test_wrong_credentials_all_get_the_same_answer(
+    client: TestClient, account: User, email: str, password: str
+) -> None:
+    response = sign_in(client, email, password)
+    assert response.status_code == 401
+    assert response.json() == {"detail": login.WRONG_CREDENTIALS}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"email": "rahul@demoexports.in"},
+        {"email": "rahul@demoexports.in", "password": ""},
+        {"email": "rahul@demoexports.in", "password": "x" * 1025},
+        {"email": "rahul@demoexports.in", "password": LOGIN_PASSWORD, "admin": True},
+    ],
+)
+def test_malformed_sign_ins_are_refused(
+    client: TestClient, account: User, body: dict[str, object]
+) -> None:
+    assert client.post("/api/v1/auth/login", json=body).status_code == 422
+
+
+def test_approvals_record_the_signed_in_person(
+    client: TestClient, session: Session, account: User
+) -> None:
+    token = sign_in(client, account.email, LOGIN_PASSWORD).json()["access_token"]
+    signed_in = {"Authorization": f"Bearer {token}"}
+    shipment_id = new_shipment(client)
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    run = under_review(session, shipment_id)
+    (message,) = drafted(session, shipment_id, run, "forwarder")
+    assert client.post(f"/api/v1/messages/{message}/approve", headers=signed_in).status_code == 200
+    decisions = client.get(f"/api/v1/shipments/{shipment_id}/approvals", headers=signed_in).json()
+    assert [d["decided_by"] for d in decisions] == ["rahul@demoexports.in"]

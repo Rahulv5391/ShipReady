@@ -10,6 +10,30 @@ from pydantic import BaseModel, ConfigDict, StringConstraints
 Reference = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 
 
+class LoginIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=254)]
+    # Long enough for any passphrase; the limit keeps a huge body from tying up scrypt.
+    password: Annotated[str, StringConstraints(min_length=1, max_length=1024)]
+    remember: bool = False  # "keep me signed in on this device"
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    email: str
+    name: str
+    org_id: uuid.UUID
+
+
+class LoginOut(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_at: datetime
+    user: UserOut
+
+
 class ShipmentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

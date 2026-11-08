@@ -16,7 +16,6 @@ from shipready.rules.catalogue import RuleSpec, load_catalogue
 
 Outcome = Literal["pass", "fail", "not_verified"]
 Verification = Literal["kept", "misread"]
-OUTCOMES: tuple[Outcome, ...] = ("pass", "fail", "not_verified")
 Check = Callable[[Fields, Reference, dict[str, Any]], str | None]  # a problem, or None
 
 CHECKS: dict[str, Check] = {**amounts.CHECKS, **shipping.CHECKS, **goods.CHECKS, **parties.CHECKS}

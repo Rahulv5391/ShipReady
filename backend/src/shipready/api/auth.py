@@ -1,7 +1,7 @@
 """Bearer tokens: signed JWTs that name the user and their organisation (PLAN.md Section 13).
 
-Every request is scoped to the organisation in its token. Until the web app's login exists
-(Phase 17), `python -m shipready.api.token` issues tokens for development.
+Every request is scoped to the organisation in its token. People get a token by signing in
+(`POST /auth/login`, shipready.api.login).
 """
 
 import os
