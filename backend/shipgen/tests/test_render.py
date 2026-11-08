@@ -1,6 +1,7 @@
 import io
 import random
 import re
+import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -14,7 +15,8 @@ from shipgen.dataset import build_case
 from shipgen.documents import build_documents
 from shipgen.generator import generate_shipment
 from shipgen.render.common import LAYOUTS, SPECIMEN_NOTE, Layout, country_name, label, text
-from shipgen.render.sheets import SHEETS, render_pdf
+from shipgen.render.sheets import SHEETS, render_docx, render_pdf
+from shipgen.render.word import FIXED_TIME
 from shipgen.render.workbook import packing_list_xlsx
 from shipready.documents.models import ShipmentDocuments
 
@@ -134,3 +136,13 @@ def test_packing_list_workbook_holds_every_value() -> None:
 def test_packing_list_workbook_is_deterministic() -> None:
     packing = BUNDLES[0].packing_list
     assert packing_list_xlsx(packing) == packing_list_xlsx(packing)
+
+
+def test_word_files_are_the_same_byte_for_byte() -> None:
+    case = build_case(42, 0)
+    first = render_docx("commercial_invoice", case.documents.commercial_invoice)
+    assert first == render_docx("commercial_invoice", case.documents.commercial_invoice)
+    with zipfile.ZipFile(io.BytesIO(first)) as archive:
+        assert {item.date_time for item in archive.infolist()} == {FIXED_TIME}
+        assert "word/document.xml" in archive.namelist()
+        assert SPECIMEN_NOTE in archive.read("word/footer1.xml").decode()

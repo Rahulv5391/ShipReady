@@ -1,5 +1,5 @@
-"""Write a case's documents as the files an exporter would receive: digital PDFs, scans, phone
-photos and Excel packing lists, sometimes several documents scanned into one PDF.
+"""Write a case's documents as the files an exporter would receive: digital PDFs, Word files,
+scans, phone photos and Excel packing lists, sometimes several documents scanned into one PDF.
 
 The files are drawn from the case's documents, which already carry its errors and look-alikes,
 so they match its labels. A document a DOC-01 label marks missing is left out.
@@ -14,16 +14,20 @@ import pypdfium2 as pdfium
 from shipgen.mutations import Label, missing_documents
 from shipgen.render.common import LAYOUTS, Layout
 from shipgen.render.degrade import pages, photo, scan, to_jpeg, to_pdf
-from shipgen.render.sheets import render_pdf
+from shipgen.render.sheets import render_docx, render_pdf
 from shipgen.render.workbook import packing_list_xlsx
 from shipready.documents.models import Model, ShipmentDocuments
 
-Format = Literal["pdf", "scan", "photo", "xlsx"]
+Format = Literal["pdf", "scan", "photo", "xlsx", "docx"]
 # PLAN.md Section 15.1: about 40% digital, 40% scanned, 20% photos or Excel.
 DIGITAL_SHARE = 0.4
 SCAN_SHARE = 0.4
 MERGE_SHARE = 0.2  # cases where several documents arrive scanned or saved into one PDF
 UPSIDE_DOWN_SHARE = 0.05  # scanned pages fed the wrong way round
+# A document the exporter or buyer types up in Word often arrives as the Word file itself; the
+# others come from customs, carriers, chambers or the GST portal as PDFs.
+WORD_DOCUMENTS = ("commercial_invoice", "packing_list", "purchase_order")
+WORD_FILE_SHARE = 0.5
 DPI = 150
 # Issued by the exporter's own software, so they share one layout.
 EXPORTER_DOCUMENTS = ("commercial_invoice", "packing_list")
@@ -34,7 +38,7 @@ class BundleFile(Model):
     documents: tuple[str, ...]  # ShipmentDocuments fields, in page order
     format: Format
     layouts: tuple[Layout, ...]  # one per document; empty for an Excel file
-    pages: int
+    pages: int | None  # None for a Word file: LibreOffice lays out its pages when it is read
     rotation: int = 0  # degrees a scanned page is turned
 
 
@@ -47,6 +51,9 @@ def write_bundle(
     shipment_id: str, documents: ShipmentDocuments, labels: tuple[Label, ...], folder: Path
 ) -> Bundle:
     rng = random.Random(f"{shipment_id}:bundle")
+    # Its own generator, so choosing Word files changes no other choice, and so no other file,
+    # of a dataset made before Word files were accepted (Decision.md D-34).
+    word = random.Random(f"{shipment_id}:word")
     missing = missing_documents(labels)
     names = [
         name
@@ -68,7 +75,7 @@ def write_bundle(
     files: list[BundleFile] = []
 
     def add(
-        path: str, data: bytes, group: list[str], kind: Format, count: int, turn: int = 0
+        path: str, data: bytes, group: list[str], kind: Format, count: int | None, turn: int = 0
     ) -> None:
         (folder / path).write_bytes(data)
         # An Excel packing list has its own fixed layout.
@@ -88,10 +95,21 @@ def write_bundle(
         first, kind = group[0], formats[group[0]]
         pdf = b""
         if kind != "xlsx":
+            # Drawn even when a Word file is written instead: its stamps draw from `rng`.
             pdf = render_pdf(
                 [(name, getattr(documents, name), layouts[name]) for name in group], rng
             )
-        if kind == "xlsx":
+        as_word = (
+            kind == "pdf"
+            and len(group) == 1
+            and first in WORD_DOCUMENTS
+            and layouts[first] == "word"
+            and word.random() < WORD_FILE_SHARE
+        )
+        if as_word:
+            data = render_docx(first, getattr(documents, first))
+            add(f"{first}.docx", data, group, "docx", None)
+        elif kind == "xlsx":
             add(f"{first}.xlsx", packing_list_xlsx(documents.packing_list), group, kind, 1)
         elif kind == "pdf":
             stem = first if len(group) == 1 else "documents"

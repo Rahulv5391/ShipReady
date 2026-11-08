@@ -16,7 +16,13 @@ from shipready.rules.catalogue import load_catalogue
 
 Medium = Literal["digital", "image"]  # PDF or Excel with text, or a scan or photo
 # How each bundle format reaches a pipeline.
-MEDIUM: dict[str, Medium] = {"pdf": "digital", "xlsx": "digital", "scan": "image", "photo": "image"}
+MEDIUM: dict[str, Medium] = {
+    "pdf": "digital",
+    "docx": "digital",
+    "xlsx": "digital",
+    "scan": "image",
+    "photo": "image",
+}
 
 
 @dataclass(frozen=True)

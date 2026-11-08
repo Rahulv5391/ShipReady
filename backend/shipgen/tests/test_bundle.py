@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pypdfium2 as pdfium
 import pytest
+from docx import Document
 
 from shipgen.bundle import (
     DIGITAL_SHARE,
     SCAN_SHARE,
+    WORD_DOCUMENTS,
     Bundle,
     _format,
     write_bundle,
@@ -17,6 +19,7 @@ from shipgen.bundle import (
 from shipgen.dataset import Case, build_case
 from shipgen.mutations import get_at, missing_documents
 from shipgen.render.common import text
+from shipready.api.uploads import DOCX, media_type
 
 
 @cache
@@ -127,3 +130,44 @@ def test_format_mix(name: str) -> None:
         assert formats["xlsx"] > 0 and formats["photo"] > 0
     else:
         assert formats["xlsx"] == 0
+
+
+def test_some_hand_typed_documents_arrive_as_word_files(tmp_path: Path) -> None:
+    written = 0
+    for case in labelled_cases()[:40]:
+        bundle = write(case, tmp_path / case.shipment_id)
+        for file in bundle.files:
+            if file.format != "docx":
+                continue
+            (name,) = file.documents
+            assert name in WORD_DOCUMENTS
+            assert file.path == f"{name}.docx"
+            assert file.layouts == ("word",)
+            data = (tmp_path / case.shipment_id / file.path).read_bytes()
+            assert media_type(data) == DOCX
+            written += 1
+    assert written >= 3
+
+
+def test_word_files_show_the_labelled_values(tmp_path: Path) -> None:
+    checked = 0
+    for case in labelled_cases():
+        if checked >= 3:
+            break
+        bundle = write(case, tmp_path / case.shipment_id)
+        for file in bundle.files:
+            if file.format != "docx":
+                continue
+            document = Document(str(tmp_path / case.shipment_id / file.path))
+            cells = [c.text for t in document.tables for r in t.rows for c in r.cells]
+            shown = squash("".join([p.text for p in document.paragraphs] + cells))
+            for label in case.labels:
+                for change in label.changes:
+                    if change.document not in file.documents or not change.field:
+                        continue
+                    value = get_at(case.documents, (change.document, *_steps(change.field)))
+                    if value is None or value == "" or isinstance(value, tuple):
+                        continue
+                    assert squash(text(value, "word")) in shown
+                    checked += 1
+    assert checked >= 3

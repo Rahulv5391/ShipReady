@@ -14,6 +14,7 @@ from shipgen.render.common import (
     port_text,
     text,
 )
+from shipgen.render.word import sheet_docx
 from shipready.documents.models import (
     AirWaybill,
     BillOfLading,
@@ -284,6 +285,11 @@ SHEETS: dict[str, Callable[[Any, Layout], Sheet]] = {
     "certificate_of_origin": certificate_of_origin,
     "lut": lut,
 }
+
+
+def render_docx(name: str, document: Any) -> bytes:
+    """A Word file of one document (a ShipmentDocuments field), in the hand-typed style."""
+    return sheet_docx(SHEETS[name](document, "word"))
 
 
 def render_pdf(parts: list[tuple[str, Any, Layout]], rng: random.Random) -> bytes:
