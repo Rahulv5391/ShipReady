@@ -29,6 +29,7 @@ from shipready.db.models import (
     Message,
     Organization,
     Run,
+    RunEvent,
     Shipment,
 )
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
@@ -234,7 +235,8 @@ def test_upload_stores_files_and_lists_them(
         ("bl.png", PNG),
     )
     assert response.status_code == 201, response.text
-    uploaded = response.json()
+    assert response.json()["duplicates"] == []
+    uploaded = response.json()["documents"]
     assert [d["filename"] for d in uploaded] == ["invoice.pdf", "packing list.xlsx", "bl.png"]
     assert [d["media_type"] for d in uploaded] == [
         "application/pdf",
@@ -255,7 +257,9 @@ def test_stored_files_are_queued_for_the_worker(
     client: TestClient, queued: list[uuid.UUID]
 ) -> None:
     shipment_id = new_shipment(client)
-    uploaded = upload(client, shipment_id, ("invoice.pdf", PDF), ("bl.png", PNG)).json()
+    uploaded = upload(client, shipment_id, ("invoice.pdf", PDF), ("bl.png", PNG)).json()[
+        "documents"
+    ]
     assert queued == [uuid.UUID(d["id"]) for d in uploaded]
     assert [(d["status"], d["parts"], d["page_count"]) for d in uploaded] == [
         ("uploaded", [], None),
@@ -272,7 +276,7 @@ def test_upload_succeeds_when_the_queue_is_down(
     client.app.dependency_overrides[get_enqueue] = lambda: broken_queue  # type: ignore[attr-defined]
     response = upload(client, new_shipment(client), ("invoice.pdf", PDF))
     assert response.status_code == 201
-    assert response.json()[0]["status"] == "uploaded"
+    assert response.json()["documents"][0]["status"] == "uploaded"
     assert "python -m shipready.worker requeue" in caplog.text
 
 
@@ -288,17 +292,20 @@ def test_type_comes_from_the_bytes_not_the_name(
     assert session.scalar(select(func.count()).select_from(Document)) == 0
 
 
-@pytest.mark.parametrize(
-    ("files", "status"),
-    [
-        ([("empty.pdf", b"")], 422),
-        ([("a.pdf", PDF), ("b.pdf", PDF)], 409),  # the same file twice
-    ],
-)
-def test_bad_uploads_are_refused(
-    client: TestClient, files: list[tuple[str, bytes]], status: int
+def test_an_empty_file_is_refused(client: TestClient) -> None:
+    assert upload(client, new_shipment(client), ("empty.pdf", b"")).status_code == 422
+
+
+def test_the_same_file_twice_in_one_upload_is_stored_once(
+    client: TestClient, storage: Storage, queued: list[uuid.UUID]
 ) -> None:
-    assert upload(client, new_shipment(client), *files).status_code == status
+    response = upload(client, new_shipment(client), ("a.pdf", PDF), ("bl.png", PNG), ("b.pdf", PDF))
+    assert response.status_code == 201
+    body = response.json()
+    assert [d["filename"] for d in body["documents"]] == ["a.pdf", "bl.png"]
+    assert body["duplicates"] == [{"filename": "b.pdf", "same_as": "a.pdf"}]
+    assert len(stored_keys(storage)) == 2
+    assert len(queued) == 2
 
 
 def test_size_and_count_limits(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -311,11 +318,22 @@ def test_size_and_count_limits(client: TestClient, monkeypatch: pytest.MonkeyPat
     assert response.status_code == 413
 
 
-def test_a_file_already_in_the_shipment_is_refused(client: TestClient) -> None:
+def test_a_file_already_in_the_shipment_is_reported_not_stored(
+    client: TestClient, storage: Storage, session: Session, queued: list[uuid.UUID]
+) -> None:
     shipment_id = new_shipment(client)
     assert upload(client, shipment_id, ("invoice.pdf", PDF)).status_code == 201
+    events = session.scalar(select(func.count()).select_from(RunEvent))
     response = upload(client, shipment_id, ("invoice-copy.pdf", PDF))
-    assert response.status_code == 409
+    # Nothing new: 200, nothing stored or queued, the run left as it was.
+    assert response.status_code == 200
+    assert response.json() == {
+        "documents": [],
+        "duplicates": [{"filename": "invoice-copy.pdf", "same_as": "invoice.pdf"}],
+    }
+    assert len(stored_keys(storage)) == 1
+    assert len(queued) == 1
+    assert session.scalar(select(func.count()).select_from(RunEvent)) == events
     # The same file may belong to another shipment.
     assert upload(client, new_shipment(client, "JOB-002"), ("invoice.pdf", PDF)).status_code == 201
 
@@ -366,7 +384,7 @@ def test_failed_clean_up_is_logged_not_hidden(
 
 def test_documents_of_another_organisation_are_hidden(client: TestClient) -> None:
     shipment_id = new_shipment(client)
-    (document,) = upload(client, shipment_id, ("invoice.pdf", PDF)).json()
+    (document,) = upload(client, shipment_id, ("invoice.pdf", PDF)).json()["documents"]
     other = headers(OTHER_ORG_ID)
     assert client.get(f"/api/v1/documents/{document['id']}", headers=other).status_code == 404
     response = client.post(

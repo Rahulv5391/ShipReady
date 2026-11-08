@@ -6,13 +6,13 @@ import uuid
 from typing import Annotated
 
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 from kombu.exceptions import OperationalError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from shipready.api.deps import EnqueueDep, PrincipalDep, SessionDep, StorageDep
-from shipready.api.schemas import DocumentOut
+from shipready.api.schemas import DocumentOut, DuplicateOut, UploadOut
 from shipready.api.shipments import shipment_of
 from shipready.api.uploads import (
     MAX_FILE_BYTES,
@@ -37,18 +37,27 @@ def upload_documents(
     session: SessionDep,
     storage: StorageDep,
     enqueue: EnqueueDep,
-) -> list[DocumentOut]:
+    response: Response,
+) -> UploadOut:
     """Store every file, or none: a bad file rejects the whole upload. Stored files are then
-    queued for the worker, which reads their pages and splits them into documents."""
+    queued for the worker, which reads their pages and splits them into documents.
+
+    A file whose bytes are already in the shipment, or earlier in the same upload, is stored
+    once and listed in `duplicates`, for the web app's soft notice (Decision.md D-34). When
+    every file was a duplicate nothing changes, and the answer is 200 instead of 201."""
     shipment = shipment_of(session, principal.org_id, shipment_id)
     if len(files) > MAX_FILES_PER_UPLOAD:
         raise HTTPException(
             status.HTTP_413_CONTENT_TOO_LARGE, f"at most {MAX_FILES_PER_UPLOAD} files per upload"
         )
-    existing = set(
-        session.scalars(select(Document.sha256).where(Document.shipment_id == shipment.id))
-    )
+    stored_as = {
+        digest: filename
+        for digest, filename in session.execute(
+            select(Document.sha256, Document.filename).where(Document.shipment_id == shipment.id)
+        )
+    }
     documents: list[tuple[Document, bytes]] = []
+    duplicates: list[DuplicateOut] = []
     for upload in files:
         name = display_name(upload.filename)
         data = upload.file.read(MAX_FILE_BYTES + 1)
@@ -66,9 +75,10 @@ def upload_documents(
                 f"{name} is not a PDF, JPEG, PNG, TIFF or Excel workbook",
             )
         digest = hashlib.sha256(data).hexdigest()
-        if digest in existing:
-            raise HTTPException(status.HTTP_409_CONFLICT, f"{name} is already in this shipment")
-        existing.add(digest)
+        if digest in stored_as:
+            duplicates.append(DuplicateOut(filename=name, same_as=stored_as[digest]))
+            continue
+        stored_as[digest] = name
         document_id = uuid.uuid4()
         document = Document(
             id=document_id,
@@ -81,6 +91,9 @@ def upload_documents(
             storage_key=storage_key(principal.org_id, shipment.id, document_id, name),
         )
         documents.append((document, data))
+    if not documents:
+        response.status_code = status.HTTP_200_OK
+        return UploadOut(documents=[], duplicates=duplicates)
 
     stored: list[str] = []
     try:
@@ -117,7 +130,10 @@ def upload_documents(
                 document.id,
                 error,
             )
-    return [DocumentOut.model_validate(document) for document, _ in documents]
+    return UploadOut(
+        documents=[DocumentOut.model_validate(document) for document, _ in documents],
+        duplicates=duplicates,
+    )
 
 
 def _remove(storage: Storage, keys: list[str]) -> None:

@@ -104,6 +104,20 @@ class DocumentOut(BaseModel):
     parts: list[DocumentPartOut]
 
 
+class DuplicateOut(BaseModel):
+    """A file left out of an upload because the same bytes are already stored as `same_as`."""
+
+    filename: str
+    same_as: str
+
+
+class UploadOut(BaseModel):
+    """The files stored, and those that were the same as a file stored already (D-34)."""
+
+    documents: list[DocumentOut]
+    duplicates: list[DuplicateOut]
+
+
 class ShipmentDetail(ShipmentOut):
     documents: list[DocumentOut]
 
