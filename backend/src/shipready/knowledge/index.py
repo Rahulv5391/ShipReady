@@ -3,8 +3,10 @@ them in Postgres (pgvector), so the compliance checks can cite the rule they rel
 
     uv run --env-file .env python -m shipready.knowledge.index --dir ../data/knowledge
 
-A source whose file is unchanged since it was indexed (same SHA-256 in manifest.json) is skipped,
-so running again costs nothing; a changed source has its passages replaced.
+A source whose file is unchanged since it was indexed (same SHA-256 in manifest.json) by the same
+embedding model is skipped, so running again costs nothing; a changed source has its passages
+replaced. After a switch of AI provider every source is embedded again: vectors of different
+models cannot be compared, so a search refuses an index built by another model (Decision.md D-35).
 """
 
 import argparse
@@ -113,12 +115,12 @@ def index_sources(session: Session, embedder: Embedder, folder: Path) -> dict[st
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))["sources"]
     indexed = {}
     for source in manifest:
-        stored = session.scalar(
-            select(KnowledgeChunk.source_sha256)
+        stored = session.execute(
+            select(KnowledgeChunk.source_sha256, KnowledgeChunk.model)
             .where(KnowledgeChunk.source_id == source["id"])
             .limit(1)
-        )
-        if stored == source["sha256"]:
+        ).first()
+        if stored is not None and tuple(stored) == (source["sha256"], embedder.model):
             continue
         passages = split_passages(source["id"], read_pages(folder / source["file"]))
         texts = [p.text for p in passages]
@@ -167,7 +169,16 @@ def search(
     sources: tuple[str, ...] = (),
 ) -> list[tuple[KnowledgeChunk, float]]:
     """The passages nearest to `question`, with their cosine distance (0 is identical), from
-    `sources` only when given. Empty when nothing is indexed."""
+    `sources` only when given. Empty when nothing is indexed; an error when any passage was
+    embedded by another model, whose vectors cannot be compared with this one's."""
+    other = session.scalar(
+        select(KnowledgeChunk.model).where(KnowledgeChunk.model != embedder.model).limit(1)
+    )
+    if other is not None:
+        raise RuntimeError(
+            f"the regulatory index was built with {other}, not {embedder.model}; rebuild it "
+            "with: python -m shipready.knowledge.index"
+        )
     (vector,) = embedder.embed([question], query=True)
     distance = KnowledgeChunk.embedding.cosine_distance(vector)
     query = select(KnowledgeChunk, distance).order_by(distance).limit(limit)

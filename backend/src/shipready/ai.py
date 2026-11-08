@@ -34,7 +34,7 @@ AI_MODES: tuple[AiMode, ...] = ("never", "fallback", "always")
 Provider = Literal["gemini", "openai"]
 PROVIDERS: tuple[Provider, ...] = ("gemini", "openai")
 PROVIDER_KEYS: dict[Provider, str] = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
-Step = Literal["classify", "extract", "judge", "critic", "drafter"]
+Step = Literal["classify", "extract", "judge", "critic", "drafter", "embed"]
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 # Reading every field of a shipment needs a larger model: Flash-Lite stopped after a quarter of
 # the fields in a trial, Flash read 97% correctly (Decision.md D-28).
@@ -56,6 +56,7 @@ DEFAULT_MODELS: dict[Provider, dict[Step, str]] = {
         "judge": DEFAULT_JUDGE_MODEL,
         "critic": DEFAULT_CRITIC_MODEL,
         "drafter": DEFAULT_DRAFTER_MODEL,
+        "embed": DEFAULT_EMBEDDING_MODEL,
     },
     "openai": {
         "classify": "gpt-6-luna",
@@ -63,6 +64,7 @@ DEFAULT_MODELS: dict[Provider, dict[Step, str]] = {
         "judge": "gpt-6-luna",
         "critic": "gpt-6.1-sol",
         "drafter": "gpt-6.1-sol",
+        "embed": "text-embedding-3-small",
     },
 }
 MODEL_VARIABLES: dict[Step, str] = {
@@ -71,6 +73,7 @@ MODEL_VARIABLES: dict[Step, str] = {
     "judge": "JUDGE_MODEL",
     "critic": "CRITIC_MODEL",
     "drafter": "DRAFTER_MODEL",
+    "embed": "EMBEDDING_MODEL",
 }
 # Texts per embedding request: about 19,000 tokens of passages, under the free tier's limit per
 # minute.
@@ -452,10 +455,33 @@ class GeminiEmbedder:
             response = self.client.models.embed_content(
                 model=self.model, contents=contents, config=config
             )
-        vectors = [list(e.values or []) for e in response.embeddings or []]
-        if len(vectors) != len(texts) or any(len(v) != EMBEDDING_DIMENSIONS for v in vectors):
-            raise ValueError(f"expected {len(texts)} embeddings of {EMBEDDING_DIMENSIONS} values")
-        return vectors
+        return _sized([list(e.values or []) for e in response.embeddings or []], len(texts))
+
+
+class OpenAIEmbedder:
+    """Embeddings cut to EMBEDDING_DIMENSIONS like Gemini's, so one table holds either. OpenAI
+    embeds a question as it does a passage, so `query` changes nothing here."""
+
+    def __init__(self, api_key: str, model: str) -> None:
+        self.client = openai.OpenAI(api_key=api_key, max_retries=0)
+        self.model = model
+
+    def embed(self, texts: list[str], query: bool) -> list[list[float]]:
+        if len(texts) > EMBED_BATCH:
+            raise ValueError(f"at most {EMBED_BATCH} texts per request, got {len(texts)}")
+        with _openai_waits():
+            response = self.client.embeddings.create(
+                model=self.model, input=texts, dimensions=EMBEDDING_DIMENSIONS
+            )
+        ordered = sorted(response.data, key=lambda item: item.index)
+        return _sized([list(item.embedding) for item in ordered], len(texts))
+
+
+def _sized(vectors: list[list[float]], count: int) -> list[list[float]]:
+    """`vectors`, checked to be `count` vectors of EMBEDDING_DIMENSIONS values."""
+    if len(vectors) != count or any(len(v) != EMBEDDING_DIMENSIONS for v in vectors):
+        raise ValueError(f"expected {count} embeddings of {EMBEDDING_DIMENSIONS} values")
+    return vectors
 
 
 class AiClassifier:
@@ -566,15 +592,20 @@ def ai_provider() -> Provider | None:
     return keyed[0] if keyed else None
 
 
-def model_from_env(step: Step, purpose: str) -> Model:
-    """The chosen provider's model for `step`; `purpose` names the step in the error when there
-    is no key."""
+def _settings(step: Step, purpose: str) -> tuple[Provider, str, str]:
+    """The chosen provider, its key and its model for `step`; `purpose` names the step in the
+    error when there is no key."""
     provider = ai_provider()
     if provider is None:
         raise RuntimeError(f"{purpose} needs GEMINI_API_KEY or OPENAI_API_KEY")
-    key = os.environ[PROVIDER_KEYS[provider]]
     variable = f"{provider.upper()}_{MODEL_VARIABLES[step]}"
     name = os.environ.get(variable) or DEFAULT_MODELS[provider][step]
+    return provider, os.environ[PROVIDER_KEYS[provider]], name
+
+
+def model_from_env(step: Step, purpose: str) -> Model:
+    """The chosen provider's model for `step`."""
+    provider, key, name = _settings(step, purpose)
     return GeminiModel(key, name) if provider == "gemini" else OpenAIModel(key, name)
 
 
@@ -589,11 +620,9 @@ def extractor_from_env() -> AiExtractor:
     return AiExtractor(model_from_env("extract", "field extraction"))
 
 
-def embedder_from_env() -> GeminiEmbedder:
-    key = os.environ.get("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError("the knowledge index needs GEMINI_API_KEY")
-    return GeminiEmbedder(key, os.environ.get("GEMINI_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL))
+def embedder_from_env() -> Embedder:
+    provider, key, name = _settings("embed", "the knowledge index")
+    return GeminiEmbedder(key, name) if provider == "gemini" else OpenAIEmbedder(key, name)
 
 
 @dataclass(frozen=True)

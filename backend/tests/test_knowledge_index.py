@@ -160,3 +160,21 @@ def test_minute_limits_are_waited_out(monkeypatch: pytest.MonkeyPatch) -> None:
     answers.append(RateLimited(6000))
     with pytest.raises(RateLimited):
         index._patiently(Flaky(), ["text"])  # a spent daily quota is not waited for
+
+
+class OtherEmbedder(WordEmbedder):
+    """The same vectors under another model's name, as after a switch of provider."""
+
+    model = "other-embedder"
+
+
+def test_a_new_embedding_model_rebuilds_the_index(session: Session, tmp_path: Path) -> None:
+    folder = knowledge(tmp_path, {"gst-rule": LUT_RULE, "plant-rule": "Plant exports."})
+    index_sources(session, WordEmbedder(), folder)
+    other = OtherEmbedder()
+    with pytest.raises(RuntimeError, match="built with word-embedder, not other-embedder"):
+        search(session, other, "export invoice")
+    assert index_sources(session, other, folder) == {"gst-rule": 1, "plant-rule": 1}
+    assert set(session.scalars(select(KnowledgeChunk.model))) == {"other-embedder"}
+    ((best, _),) = search(session, other, "export invoice", limit=1)
+    assert best.source_id == "gst-rule"

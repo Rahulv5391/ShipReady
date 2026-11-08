@@ -9,6 +9,7 @@ import pytest
 from google.genai import errors
 
 from shipready import ai
+from shipready.db.models import EMBEDDING_DIMENSIONS
 from shipready.extract import DocumentText, RawField
 from shipready.pages import Page
 
@@ -514,3 +515,59 @@ def test_each_step_uses_the_chosen_provider(monkeypatch: pytest.MonkeyPatch) -> 
     judge = ai.judge_from_env()
     assert isinstance(judge.ai, ai.GeminiModel)
     assert judge.model == ai.DEFAULT_JUDGE_MODEL
+
+
+def test_openai_embedder_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    embedder = ai.OpenAIEmbedder("test-key", "text-embedding-3-small")
+    calls: list[Any] = []
+
+    def create(**request: Any) -> SimpleNamespace:
+        calls.append(request)
+        # Answers carry their position; they are put back in the order asked.
+        data = [
+            SimpleNamespace(index=1, embedding=[0.2] * EMBEDDING_DIMENSIONS),
+            SimpleNamespace(index=0, embedding=[0.1] * EMBEDDING_DIMENSIONS),
+        ]
+        return SimpleNamespace(data=data)
+
+    monkeypatch.setattr(embedder.client.embeddings, "create", create)
+    first, second = embedder.embed(["a", "b"], query=False)
+    assert (first[0], second[0]) == (0.1, 0.2)
+    (request,) = calls
+    assert request == {
+        "model": "text-embedding-3-small",
+        "input": ["a", "b"],
+        "dimensions": EMBEDDING_DIMENSIONS,
+    }
+    with pytest.raises(ValueError, match="at most"):
+        embedder.embed(["x"] * (ai.EMBED_BATCH + 1), query=False)
+
+
+def test_openai_embeddings_of_the_wrong_size_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    embedder = ai.OpenAIEmbedder("test-key", "text-embedding-3-small")
+    monkeypatch.setattr(
+        embedder.client.embeddings,
+        "create",
+        lambda **request: SimpleNamespace(data=[SimpleNamespace(index=0, embedding=[0.1] * 3)]),
+    )
+    with pytest.raises(ValueError, match="expected 1 embeddings of 768"):
+        embedder.embed(["a"], query=False)
+
+
+def test_the_embedder_follows_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    monkeypatch.delenv("OPENAI_EMBEDDING_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_EMBEDDING_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "o")
+    embedder = ai.embedder_from_env()
+    assert isinstance(embedder, ai.OpenAIEmbedder)
+    assert embedder.model == "text-embedding-3-small"
+    monkeypatch.delenv("OPENAI_API_KEY")
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    embedder = ai.embedder_from_env()
+    assert isinstance(embedder, ai.GeminiEmbedder)
+    assert embedder.model == ai.DEFAULT_EMBEDDING_MODEL
+    monkeypatch.delenv("GEMINI_API_KEY")
+    with pytest.raises(RuntimeError, match="the knowledge index needs GEMINI_API_KEY or"):
+        ai.embedder_from_env()
