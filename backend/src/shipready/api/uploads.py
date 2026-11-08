@@ -12,7 +12,9 @@ import zipfile
 MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_FILES_PER_UPLOAD = 30
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-# Leading bytes of each accepted type (PLAN.md Section 5.1: PDFs, scans and photos, Excel).
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+# Leading bytes of each accepted type (PLAN.md Section 5.1: PDFs, scans and photos, Excel;
+# Word added by Decision.md D-34).
 _SIGNATURES = (
     (b"%PDF-", "application/pdf"),
     (b"\xff\xd8\xff", "image/jpeg"),
@@ -28,17 +30,23 @@ def media_type(data: bytes) -> str | None:
     for signature, kind in _SIGNATURES:
         if data.startswith(signature):
             return kind
-    if data.startswith(b"PK\x03\x04") and _is_workbook(data):
-        return XLSX
+    if data.startswith(b"PK\x03\x04"):
+        return _office_type(data)
     return None
 
 
-def _is_workbook(data: bytes) -> bool:
+def _office_type(data: bytes) -> str | None:
+    """Excel and Word files are both ZIP archives; the part inside tells them apart."""
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            return "xl/workbook.xml" in archive.namelist()
+            names = set(archive.namelist())
     except zipfile.BadZipFile:
-        return False
+        return None
+    if "xl/workbook.xml" in names:
+        return XLSX
+    if "word/document.xml" in names:
+        return DOCX
+    return None
 
 
 def display_name(filename: str | None) -> str:

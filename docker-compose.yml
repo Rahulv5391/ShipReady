@@ -38,6 +38,24 @@ services:
       interval: 2s
       retries: 15
 
+  # The worker, with LibreOffice for Word documents (backend/Dockerfile). Settings come from
+  # backend/.env; the services are reached by their names inside Docker.
+  worker:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://shipready:shipready@postgres:5432/shipready
+      S3_ENDPOINT_URL: http://storage:8333
+      REDIS_URL: redis://redis:6379/0
+      SOFFICE_PATH: soffice
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      storage:
+        condition: service_started
+
 volumes:
   pgdata:
   storagedata:

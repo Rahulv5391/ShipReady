@@ -1,8 +1,10 @@
 """Read an uploaded file as pages: an image of each page, its text and every word's box.
 
 A PDF's own text layer is used when it has one; a scanned page, a photo or a page with almost no
-text is read with OCR (RapidOCR). An Excel workbook gives one page per sheet, text only. Word
-boxes are fractions of the page (0..1 from the top left), so they fit the image at any size.
+text is read with OCR (RapidOCR). A Word document is turned into a PDF first (LibreOffice), so
+its pages have images for highlights. An Excel workbook gives one page per sheet, text only.
+Word boxes are fractions of the page (0..1 from the top left), so they fit the image at any
+size.
 """
 
 import io
@@ -19,7 +21,8 @@ from rapidocr import RapidOCR
 from rapidocr.ch_ppocr_cls import TextClsOutput
 from rapidocr.utils.output import RapidOCROutput
 
-from shipready.api.uploads import XLSX
+from shipready.api.uploads import DOCX, XLSX
+from shipready.convert import docx_to_pdf
 
 TextSource = Literal["pdf_text", "ocr", "cells"]
 TEXT_SOURCES: tuple[TextSource, ...] = ("pdf_text", "ocr", "cells")
@@ -61,6 +64,8 @@ class Page:
 def read_pages(data: bytes, media_type: str) -> list[Page]:
     if media_type == "application/pdf":
         return _pdf_pages(data)
+    if media_type == DOCX:
+        return _pdf_pages(docx_to_pdf(data))
     if media_type == XLSX:
         return _sheet_pages(data)
     if media_type.startswith("image/"):

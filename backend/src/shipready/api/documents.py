@@ -72,7 +72,7 @@ def upload_documents(
         if kind is None:
             raise HTTPException(
                 status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                f"{name} is not a PDF, JPEG, PNG, TIFF or Excel workbook",
+                f"{name} is not a PDF, Word document, Excel workbook, JPEG, PNG or TIFF",
             )
         digest = hashlib.sha256(data).hexdigest()
         if digest in stored_as:

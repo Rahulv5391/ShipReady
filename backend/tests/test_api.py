@@ -53,6 +53,14 @@ def workbook() -> bytes:
     return buffer.getvalue()
 
 
+def word_document() -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        entry = zipfile.ZipInfo("word/document.xml", date_time=(2026, 1, 1, 0, 0, 0))
+        archive.writestr(entry, "<w:document/>")
+    return buffer.getvalue()
+
+
 @pytest.fixture
 def storage() -> Iterator[Storage]:
     with mock_aws():
@@ -233,21 +241,28 @@ def test_upload_stores_files_and_lists_them(
         ("C:\\exports\\invoice.pdf", PDF),
         ("packing list.xlsx", workbook()),
         ("bl.png", PNG),
+        ("purchase order.docx", word_document()),
     )
     assert response.status_code == 201, response.text
     assert response.json()["duplicates"] == []
     uploaded = response.json()["documents"]
-    assert [d["filename"] for d in uploaded] == ["invoice.pdf", "packing list.xlsx", "bl.png"]
+    assert [d["filename"] for d in uploaded] == [
+        "invoice.pdf",
+        "packing list.xlsx",
+        "bl.png",
+        "purchase order.docx",
+    ]
     assert [d["media_type"] for d in uploaded] == [
         "application/pdf",
         uploads.XLSX,
         "image/png",
+        uploads.DOCX,
     ]
 
     detail = client.get(f"/api/v1/shipments/{shipment_id}", headers=headers()).json()
     assert {d["id"] for d in detail["documents"]} == {d["id"] for d in uploaded}
     for document in session.scalars(select(Document)):
-        assert storage.get(document.storage_key) in (PDF, PNG, workbook())
+        assert storage.get(document.storage_key) in (PDF, PNG, workbook(), word_document())
         assert document.storage_key.startswith(f"orgs/{DEMO_ORG_ID}/shipments/{shipment_id}/")
     one = client.get(f"/api/v1/documents/{uploaded[0]['id']}", headers=headers()).json()
     assert one == uploaded[0]
@@ -416,12 +431,20 @@ def test_deleting_a_shipment_deletes_its_document_rows(
         (PNG, "image/png"),
         (b"II*\x00rest", "image/tiff"),
         (workbook(), uploads.XLSX),
+        (word_document(), uploads.DOCX),
         (b"PK\x03\x04not a zip", None),  # a zip header that is not a workbook
         (b"<html>", None),
     ],
 )
 def test_media_type(data: bytes, expected: str | None) -> None:
     assert uploads.media_type(data) == expected
+
+
+def test_a_zip_that_is_neither_workbook_nor_document_is_refused() -> None:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("ppt/presentation.xml", "<p/>")
+    assert uploads.media_type(buffer.getvalue()) is None
 
 
 def test_names_and_keys_cannot_escape() -> None:
