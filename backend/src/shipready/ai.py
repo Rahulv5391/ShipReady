@@ -1,14 +1,16 @@
-"""The AI behind the checks, behind one small interface so the provider can change.
+"""The AI behind the checks: each step (classifier, extractor, judge, critic, drafter) builds
+its request and checks its answer here, and a provider's `Model` only carries it, so the same step
+runs on Gemini or OpenAI, whichever .env chooses (Decision.md D-35).
 
-Development uses Gemini's free tier; the OpenAI adapter comes when its key is available
-(Decision.md D-26). Free-tier providers may keep what they are sent, so only synthetic
-documents may go through a free-tier key.
+Development uses Gemini's free tier until the OpenAI key arrives (Decision.md D-26). Free-tier
+providers may keep what they are sent, so only synthetic documents may go through a free-tier key.
 
 Document text is untrusted: it is sent as data between markers, and answers have a fixed shape
 (a known document type; fields whose paths and quotes are checked against the documents), so text
 in a document cannot steer anything beyond that.
 """
 
+import base64
 import json
 import os
 import re
@@ -18,8 +20,10 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 import httpx
+import openai
 from google import genai
 from google.genai import errors, types
+from openai.types.responses import ResponseInputContentParam, ResponseTextConfigParam
 
 from shipready.db.models import EMBEDDING_DIMENSIONS
 from shipready.documents.types import DOCUMENT_TYPES
@@ -30,6 +34,7 @@ AI_MODES: tuple[AiMode, ...] = ("never", "fallback", "always")
 Provider = Literal["gemini", "openai"]
 PROVIDERS: tuple[Provider, ...] = ("gemini", "openai")
 PROVIDER_KEYS: dict[Provider, str] = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
+Step = Literal["classify", "extract", "judge", "critic", "drafter"]
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 # Reading every field of a shipment needs a larger model: Flash-Lite stopped after a quarter of
 # the fields in a trial, Flash read 97% correctly (Decision.md D-28).
@@ -42,12 +47,37 @@ DEFAULT_JUDGE_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_CRITIC_MODEL = "gemini-3.5-flash-lite"
 # Short business messages: the same model writes them.
 DEFAULT_DRAFTER_MODEL = "gemini-3.5-flash-lite"
+# Each step's model per provider, overridden by <PROVIDER>_<variable> in .env. OpenAI's follow
+# PLAN.md Section 9 (Responses API in place of the Decisions API) until the Phase 12 benchmark.
+DEFAULT_MODELS: dict[Provider, dict[Step, str]] = {
+    "gemini": {
+        "classify": DEFAULT_GEMINI_MODEL,
+        "extract": DEFAULT_EXTRACT_MODEL,
+        "judge": DEFAULT_JUDGE_MODEL,
+        "critic": DEFAULT_CRITIC_MODEL,
+        "drafter": DEFAULT_DRAFTER_MODEL,
+    },
+    "openai": {
+        "classify": "gpt-6-luna",
+        "extract": "gpt-6.1-sol",
+        "judge": "gpt-6-luna",
+        "critic": "gpt-6.1-sol",
+        "drafter": "gpt-6.1-sol",
+    },
+}
+MODEL_VARIABLES: dict[Step, str] = {
+    "classify": "MODEL",
+    "extract": "EXTRACT_MODEL",
+    "judge": "JUDGE_MODEL",
+    "critic": "CRITIC_MODEL",
+    "drafter": "DRAFTER_MODEL",
+}
 # Texts per embedding request: about 19,000 tokens of passages, under the free tier's limit per
 # minute.
 EMBED_BATCH = 50
 # Enough of a page to recognise it; titles and headings come first.
 MAX_PAGE_CHARS = 6000
-# Gemini states no wait when a model is overloaded (503), nor does a dropped connection.
+# No wait is stated when a model is overloaded (503), nor for a dropped connection.
 OVERLOAD_WAIT_S = 60.0
 NETWORK_WAIT_S = 15.0
 # A shipment's fields with their quotes; room for documents with many line items.
@@ -224,20 +254,43 @@ class PageClassifier(Protocol):
     def classify(self, page_text: str) -> AiAnswer: ...
 
 
-class _Gemini:
-    def __init__(self, api_key: str, model: str = DEFAULT_GEMINI_MODEL) -> None:
+@dataclass(frozen=True)
+class Image:
+    """A PNG sent with the text, such as a crop of a page for the critic."""
+
+    png: bytes
+
+
+# Text, or text and images in the order the model should read them.
+Contents = str | list[str | Image]
+
+
+class Model(Protocol):
+    """One provider's model: answers `contents` with JSON shaped by `schema`."""
+
+    model: str
+
+    def ask(
+        self,
+        instructions: str,
+        contents: Contents,
+        schema: dict[str, Any],
+        max_tokens: int | None = None,
+    ) -> str: ...
+
+
+class GeminiModel:
+    def __init__(self, api_key: str, model: str) -> None:
         self.client = genai.Client(api_key=api_key)
         self.model = model
 
     def ask(
         self,
         instructions: str,
-        contents: str | types.Content,
+        contents: Contents,
         schema: dict[str, Any],
         max_tokens: int | None = None,
     ) -> str:
-        """The model's JSON answer to `contents` (text, or text and images), shaped by
-        `schema`."""
         config = types.GenerateContentConfig(
             system_instruction=instructions,
             temperature=0,
@@ -245,15 +298,28 @@ class _Gemini:
             response_mime_type="application/json",
             response_schema=schema,
         )
-        with _waits():
+        request: str | types.Content
+        if isinstance(contents, str):
+            request = contents
+        else:
+            request = types.Content(
+                role="user",
+                parts=[
+                    types.Part(text=part)
+                    if isinstance(part, str)
+                    else types.Part.from_bytes(data=part.png, mime_type="image/png")
+                    for part in contents
+                ],
+            )
+        with _gemini_waits():
             response = self.client.models.generate_content(
-                model=self.model, contents=contents, config=config
+                model=self.model, contents=request, config=config
             )
         return response.text or ""
 
 
 @contextmanager
-def _waits() -> Iterator[None]:
+def _gemini_waits() -> Iterator[None]:
     """Gemini's "try later" answers as RateLimited: a spent quota (429) with the wait it states,
     "model overloaded" (503), which passes within minutes, and a connection dropped or timed out
     on the way. Other errors are real failures."""
@@ -269,6 +335,95 @@ def _waits() -> Iterator[None]:
         if error.code == 503:
             raise RateLimited(OVERLOAD_WAIT_S) from error
         raise
+
+
+class OpenAIModel:
+    """The Responses API with Structured Outputs. No temperature is sent: OpenAI's reasoning
+    models refuse one, and the strict schema already fixes the answer's shape."""
+
+    def __init__(self, api_key: str, model: str) -> None:
+        # Waits go through RateLimited and the task queue, as with Gemini, not the SDK's retries.
+        self.client = openai.OpenAI(api_key=api_key, max_retries=0)
+        self.model = model
+
+    def ask(
+        self,
+        instructions: str,
+        contents: Contents,
+        schema: dict[str, Any],
+        max_tokens: int | None = None,
+    ) -> str:
+        parts = [contents] if isinstance(contents, str) else contents
+        content: list[ResponseInputContentParam] = [
+            {"type": "input_text", "text": part}
+            if isinstance(part, str)
+            else {
+                "type": "input_image",
+                "image_url": "data:image/png;base64," + base64.b64encode(part.png).decode(),
+                "detail": "high",
+            }
+            for part in parts
+        ]
+        answer_format: ResponseTextConfigParam = {
+            "format": {
+                "type": "json_schema",
+                "name": "answer",
+                "schema": strict_schema(schema),
+                "strict": True,
+            }
+        }
+        with _openai_waits():
+            response = self.client.responses.create(
+                model=self.model,
+                instructions=instructions,
+                input=[{"role": "user", "content": content}],
+                text=answer_format,
+                max_output_tokens=openai.omit if max_tokens is None else max_tokens,
+                # Shipment documents are not kept on OpenAI's side for later turns.
+                store=False,
+            )
+        return response.output_text
+
+
+def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """`schema` as OpenAI's strict mode needs it: no object may take properties it does not
+    list. Every property is already required in ShipReady's schemas."""
+    strict = dict(schema)
+    if strict.get("type") == "object":
+        strict["additionalProperties"] = False
+        strict["properties"] = {
+            name: strict_schema(value) for name, value in strict.get("properties", {}).items()
+        }
+    if "items" in strict:
+        strict["items"] = strict_schema(strict["items"])
+    return strict
+
+
+@contextmanager
+def _openai_waits() -> Iterator[None]:
+    """OpenAI's "try later" answers as RateLimited: a rate limit (429) with its retry-after
+    header, an overloaded model (503) and a dropped or timed-out connection. A spent balance is
+    also a 429 but no wait cures it, so it fails like other errors."""
+    try:
+        yield
+    except openai.APIConnectionError as error:
+        raise RateLimited(NETWORK_WAIT_S) from error
+    except openai.RateLimitError as error:
+        if error.code == "insufficient_quota":
+            raise
+        raise RateLimited(_header_wait(error.response.headers.get("retry-after"))) from error
+    except openai.InternalServerError as error:
+        if error.status_code == 503:
+            raise RateLimited(OVERLOAD_WAIT_S) from error
+        raise
+
+
+def _header_wait(value: str | None) -> float:
+    """The seconds of a retry-after header; a minute when it is missing or not a number."""
+    try:
+        return float(value) if value else 60.0
+    except ValueError:
+        return 60.0
 
 
 class Embedder(Protocol):
@@ -293,7 +448,7 @@ class GeminiEmbedder:
         )
         # Each text as its own content: a plain list of strings is embedded as one input.
         contents = [types.Content(parts=[types.Part(text=text)]) for text in texts]
-        with _waits():
+        with _gemini_waits():
             response = self.client.models.embed_content(
                 model=self.model, contents=contents, config=config
             )
@@ -303,7 +458,11 @@ class GeminiEmbedder:
         return vectors
 
 
-class GeminiClassifier(_Gemini):
+class AiClassifier:
+    def __init__(self, ai: Model) -> None:
+        self.ai = ai
+        self.model = ai.model
+
     def classify(self, page_text: str) -> AiAnswer:
         schema = {
             "type": "object",
@@ -314,21 +473,22 @@ class GeminiClassifier(_Gemini):
             "required": ["doc_type", "confidence"],
         }
         contents = f"<page>\n{page_text[:MAX_PAGE_CHARS]}\n</page>"
-        return parse_answer(self.ask(_INSTRUCTIONS, contents, schema))
+        return parse_answer(self.ai.ask(_INSTRUCTIONS, contents, schema))
 
 
-class GeminiExtractor(_Gemini):
+class AiExtractor:
     """Reads every document of a shipment in one request (Decision.md D-28), so a run costs one
     call per shipment rather than one per document."""
 
-    def __init__(self, api_key: str, model: str = DEFAULT_EXTRACT_MODEL) -> None:
-        super().__init__(api_key, model)
+    def __init__(self, ai: Model) -> None:
+        self.ai = ai
+        self.model = ai.model
 
     def extract(self, documents: list[DocumentText], guide: str) -> list[RawField]:
         contents = f"<guide>\n{guide}\n</guide>\n" + "\n".join(
             _document_markup(document) for document in documents
         )
-        answer = self.ask(EXTRACT_INSTRUCTIONS, contents, _FIELDS_SCHEMA, MAX_EXTRACT_TOKENS)
+        answer = self.ai.ask(EXTRACT_INSTRUCTIONS, contents, _FIELDS_SCHEMA, MAX_EXTRACT_TOKENS)
         return parse_fields(answer)
 
 
@@ -406,23 +566,27 @@ def ai_provider() -> Provider | None:
     return keyed[0] if keyed else None
 
 
+def model_from_env(step: Step, purpose: str) -> Model:
+    """The chosen provider's model for `step`; `purpose` names the step in the error when there
+    is no key."""
+    provider = ai_provider()
+    if provider is None:
+        raise RuntimeError(f"{purpose} needs GEMINI_API_KEY or OPENAI_API_KEY")
+    key = os.environ[PROVIDER_KEYS[provider]]
+    variable = f"{provider.upper()}_{MODEL_VARIABLES[step]}"
+    name = os.environ.get(variable) or DEFAULT_MODELS[provider][step]
+    return GeminiModel(key, name) if provider == "gemini" else OpenAIModel(key, name)
+
+
 def classifier_from_env() -> PageClassifier | None:
     """The configured classifier, or None when AI is switched off (CLASSIFY_WITH_AI=never)."""
     if ai_mode() == "never":
         return None
-    key = os.environ.get("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError(
-            "CLASSIFY_WITH_AI needs GEMINI_API_KEY; set it, or set CLASSIFY_WITH_AI=never"
-        )
-    return GeminiClassifier(key, os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL))
+    return AiClassifier(model_from_env("classify", "CLASSIFY_WITH_AI (or set it to never)"))
 
 
-def extractor_from_env() -> GeminiExtractor:
-    key = os.environ.get("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError("field extraction needs GEMINI_API_KEY")
-    return GeminiExtractor(key, os.environ.get("GEMINI_EXTRACT_MODEL", DEFAULT_EXTRACT_MODEL))
+def extractor_from_env() -> AiExtractor:
+    return AiExtractor(model_from_env("extract", "field extraction"))
 
 
 def embedder_from_env() -> GeminiEmbedder:
@@ -455,15 +619,16 @@ class Judge(Protocol):
     def judge(self, questions: list[Question]) -> list[Verdict]: ...
 
 
-class GeminiJudge(_Gemini):
+class AiJudge:
     """Answers all of a shipment's questions in one request (Decision.md D-31)."""
 
-    def __init__(self, api_key: str, model: str = DEFAULT_JUDGE_MODEL) -> None:
-        super().__init__(api_key, model)
+    def __init__(self, ai: Model) -> None:
+        self.ai = ai
+        self.model = ai.model
 
     def judge(self, questions: list[Question]) -> list[Verdict]:
         contents = "\n".join(f'<question id="{q.id}">\n{q.text}\n</question>' for q in questions)
-        answer = self.ask(JUDGE_INSTRUCTIONS, contents, _VERDICTS_SCHEMA)
+        answer = self.ai.ask(JUDGE_INSTRUCTIONS, contents, _VERDICTS_SCHEMA)
         return parse_verdicts(answer, {q.id for q in questions})
 
 
@@ -487,11 +652,8 @@ def parse_verdicts(text: str, ids: set[str]) -> list[Verdict]:
     return verdicts
 
 
-def judge_from_env() -> GeminiJudge:
-    key = os.environ.get("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError("the semantic checks need GEMINI_API_KEY")
-    return GeminiJudge(key, os.environ.get("GEMINI_JUDGE_MODEL", DEFAULT_JUDGE_MODEL))
+def judge_from_env() -> AiJudge:
+    return AiJudge(model_from_env("judge", "the semantic checks"))
 
 
 @dataclass(frozen=True)
@@ -527,30 +689,28 @@ class Critic(Protocol):
     def review(self, suspects: list[Suspect]) -> list[Review]: ...
 
 
-class GeminiCritic(_Gemini):
+class AiCritic:
     """Reviews all of a shipment's failed checks in one request (Decision.md D-32)."""
 
-    def __init__(self, api_key: str, model: str = DEFAULT_CRITIC_MODEL) -> None:
-        super().__init__(api_key, model)
+    def __init__(self, ai: Model) -> None:
+        self.ai = ai
+        self.model = ai.model
 
     def review(self, suspects: list[Suspect]) -> list[Review]:
-        parts: list[types.Part] = []
+        parts: list[str | Image] = []
         for suspect in suspects:
             listed = "\n".join(
                 f"- {path}: read as {value!r} from {quote!r}"
                 for path, value, quote in suspect.fields
             )
             parts.append(
-                types.Part(
-                    text=f'<finding id="{suspect.id}">\nCheck: {suspect.check}\n'
-                    f"Problem: {suspect.problem}\nValues read:\n{listed}\n</finding>"
-                )
+                f'<finding id="{suspect.id}">\nCheck: {suspect.check}\n'
+                f"Problem: {suspect.problem}\nValues read:\n{listed}\n</finding>"
             )
             for crop in suspect.crops:
-                parts.append(types.Part(text=f"Image of {crop.path} for finding {suspect.id}:"))
-                parts.append(types.Part.from_bytes(data=crop.png, mime_type="image/png"))
-        contents = types.Content(role="user", parts=parts)
-        answer = self.ask(CRITIC_INSTRUCTIONS, contents, _REVIEWS_SCHEMA)
+                parts.append(f"Image of {crop.path} for finding {suspect.id}:")
+                parts.append(Image(crop.png))
+        answer = self.ai.ask(CRITIC_INSTRUCTIONS, parts, _REVIEWS_SCHEMA)
         return parse_reviews(answer, {s.id for s in suspects})
 
 
@@ -574,11 +734,8 @@ def parse_reviews(text: str, ids: set[str]) -> list[Review]:
     return reviews
 
 
-def critic_from_env() -> GeminiCritic:
-    key = os.environ.get("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError("the critic needs GEMINI_API_KEY")
-    return GeminiCritic(key, os.environ.get("GEMINI_CRITIC_MODEL", DEFAULT_CRITIC_MODEL))
+def critic_from_env() -> AiCritic:
+    return AiCritic(model_from_env("critic", "the critic"))
 
 
 @dataclass(frozen=True)
@@ -604,11 +761,12 @@ class Drafter(Protocol):
         """One message per recipient in `requests`, asking about its problems."""
 
 
-class GeminiDrafter(_Gemini):
+class AiDrafter:
     """Writes all of a shipment's messages in one request (Decision.md D-33)."""
 
-    def __init__(self, api_key: str, model: str = DEFAULT_DRAFTER_MODEL) -> None:
-        super().__init__(api_key, model)
+    def __init__(self, ai: Model) -> None:
+        self.ai = ai
+        self.model = ai.model
 
     def draft(self, shipment: str, sender: str, requests: dict[str, list[Problem]]) -> list[Draft]:
         listed = "\n".join(
@@ -618,7 +776,7 @@ class GeminiDrafter(_Gemini):
             for role, problems in requests.items()
         )
         contents = f"Shipment: {shipment}\nSender: {sender}\n{listed}"
-        answer = self.ask(DRAFTER_INSTRUCTIONS, contents, _drafts_schema(list(requests)))
+        answer = self.ai.ask(DRAFTER_INSTRUCTIONS, contents, _drafts_schema(list(requests)))
         return parse_drafts(answer, {role: len(problems) for role, problems in requests.items()})
 
 
@@ -652,8 +810,5 @@ def parse_drafts(text: str, problems: dict[str, int]) -> list[Draft]:
     return [Draft(recipient, subject, body) for recipient, subject, _, body in drafts]
 
 
-def drafter_from_env() -> GeminiDrafter:
-    key = os.environ.get("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError("drafting messages needs GEMINI_API_KEY")
-    return GeminiDrafter(key, os.environ.get("GEMINI_DRAFTER_MODEL", DEFAULT_DRAFTER_MODEL))
+def drafter_from_env() -> AiDrafter:
+    return AiDrafter(model_from_env("drafter", "drafting messages"))

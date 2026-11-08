@@ -20,9 +20,9 @@ from evals.cases import load_case
 from evals.page_cache import cached_pages, page_image
 from shipready.ai import (
     AiAnswer,
+    AiClassifier,
     AiMode,
     Critic,
-    GeminiClassifier,
     Judge,
     PageClassifier,
     Question,
@@ -34,6 +34,7 @@ from shipready.ai import (
     embedder_from_env,
     extractor_from_env,
     judge_from_env,
+    model_from_env,
 )
 from shipready.api.uploads import media_type
 from shipready.checks.critic import crop_png, review
@@ -92,10 +93,8 @@ class ClassifyPipeline:
         self.name = {"never": "rules", "fallback": "rules+ai", "always": "ai"}[mode]
         self.ai: PageClassifier | None = None
         if mode != "never":
-            key = os.environ.get("GEMINI_API_KEY")
-            if not key:
-                raise ValueError(f"the {self.name} pipeline needs GEMINI_API_KEY")
-            self.ai = _PatientClassifier(GeminiClassifier(key))
+            model = model_from_env("classify", f"the {self.name} pipeline")
+            self.ai = _PatientClassifier(AiClassifier(model))
 
     def run(self, folder: Path, files: tuple[str, ...]) -> Prediction:
         predicted, _ = read_documents(folder, files, self.mode, self.ai)

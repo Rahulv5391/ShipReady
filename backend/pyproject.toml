@@ -15,6 +15,7 @@ dependencies = [
     "httpx>=0.28",
     "numpy>=2.5.4",
     "onnxruntime>=1.31.1",
+    "openai>=3.46.0",
     "openpyxl>=3.1.5",
     "pgvector>=0.4",
     "pillow>=13.0.0",
