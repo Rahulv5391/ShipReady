@@ -86,7 +86,7 @@ Today these checks are done by eye, document by document, often under deadline p
 
 ### In scope (MVP)
 
-1. Upload a shipment bundle (PDF, images, XLSX, DOCX, EML) through the web app.
+1. Upload a shipment bundle (PDF, images, XLSX, DOCX, EML) through the web app, from the computer or from Google Drive (Section 13.8).
 2. Auto-classify each file (or page range) into a document type.
 3. Extract structured fields and line items, with evidence (page, text snippet, bounding box, confidence).
 4. Normalise values (units, currencies, dates, codes).
@@ -287,7 +287,7 @@ Key Value on Render (Singapore region, closest to India) · documents in Cloudfl
 | Language (backend/AI) | **Python 3.12** | Best OpenAI SDK and Agents SDK support; document tooling |
 | API | **FastAPI** + Pydantic v2 | Typed schemas shared with Structured Outputs; async |
 | Agent framework | **OpenAI Agents SDK (`openai-agents`, pinned, currently 0.24.x)** | Official orchestration: agents-as-tools, guardrails, `needs_approval` human-in-the-loop, sessions, tracing. Self-hosted orchestration so we keep data control (see ADR-1) |
-| LLM API | **OpenAI Responses API** (+ Decisions API, Files, Vector Stores) once the company's key arrives; until then **Gemini free tier** behind a provider-neutral layer, synthetic data only (Decision.md D-26) | Required for built-in tools and current models; Assistants API is shut down |
+| LLM API | **OpenAI Responses API** or **Gemini**, chosen in `.env`: the provider whose key is set, or `AI_PROVIDER` when both are (Phase 12a, Decision.md D-35). Gemini's free tier until the company's OpenAI key arrives, synthetic data only (Decision.md D-26) | Required for built-in tools and current models; Assistants API is shut down |
 | Task queue | **Celery + Render Key Value** (Redis-compatible; Redis locally) | Long-running multi-document runs, retries, concurrency limits |
 | Database | **Render Postgres 16 + pgvector** | Relational core + JSONB for extracted payloads + vectors for product master similarity |
 | ORM / migrations | SQLAlchemy 2.0 + Alembic | Standard |
@@ -883,9 +883,35 @@ REST over HTTPS, JSON, versioned under `/api/v1`. Auth: Bearer JWT; org taken fr
 | API | Use | Phase |
 |---|---|---|
 | OpenAI Responses, Decisions, Files, Vector Stores, Web Search | Core AI | MVP |
+| Google Gemini API | Core AI, the alternative to OpenAI chosen in `.env` (Decision.md D-35) | Phase 10 onwards; switch in Phase 12a |
 | Email (SMTP / Gmail API / Microsoft Graph) | Send approved messages; later, ingest from a shared inbox | MVP (send) / Later (ingest) |
 | DGFT / CBIC sites | Reference data (download + parse; manual upload fallback) | MVP |
 | ICEGATE Open APIs (BE/SB JSON filing, schemas v1.2; requires ICEGATE registration and encrypted auth) | **Not for filing by us.** Later: export a pre-filled SB JSON draft for the CHA to review and file themselves | Later |
+| Google Picker API + Google Drive API v3 | Import shipment files from the user's Google Drive (Section 13.8) | Phase 17 |
+
+### 13.8 Upload sources and file rules (added 4 Nov 2026, Decision.md D-34)
+
+**Accepted types.** PDF, JPEG, PNG, TIFF, Excel (`.xlsx`) and Word (`.docx`). The API still decides the type from the file's bytes, never its name. `.docx` and `.xlsx` are both ZIP (Office Open XML) files, so `api/uploads.media_type` must look inside the archive: `word/document.xml` means Word, `xl/workbook.xml` means Excel. Legacy `.doc` and `.xls` are not accepted.
+
+**Prevent rather than reject (UI).** The file chooser and the drop zone accept only those types (`accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.xlsx,.docx"` plus their MIME types). A dropped file of another type is never added to the list, and a short neutral hint names the supported types. The red "unsupported file" state is removed from the design. The API keeps its 415 check as a safety net for direct API calls.
+
+**Duplicates are accepted, not refused.** Today `POST /shipments/{id}/documents` answers 409 when a file's SHA-256 is already in the shipment, and the database enforces one row per checksum per shipment. New behaviour:
+- Same file twice in one request, or a file already in the shipment: store it once, answer `201` with the new `documents` and a `duplicates` list (`[{filename, same_as}]`). If every file was a duplicate, answer `200` with an empty `documents` list.
+- The UI lets the user add the same file twice. After **Upload and check**, it shows a soft, non-blocking notice: "You added BL_draft.pdf twice, so it was uploaded once." Nothing is shown in red.
+- The unique index on `(shipment_id, sha256)` stays: it is what makes "store once" safe under concurrent uploads.
+
+**Word documents (DOCX) in the pipeline.** Evidence highlighting needs pages with word boxes and page images, so a `.docx` is converted to PDF in the worker with headless LibreOffice (`soffice --headless --convert-to pdf`, one conversion at a time, a fresh profile directory per run, 60-second timeout). The converted PDF then follows the existing PDF path (`pages.read_pages`: text layer with character boxes, rendered page images). The converted PDF is stored next to the original (`.../documents/{doc}/converted.pdf`) and the original is kept for download.
+- Alternative considered: `python-docx` text only, like Excel's one-page-per-sheet. Lighter, but there is no page image and no real position for each word, so the evidence viewer could not highlight anything. Kept as a fallback only if LibreOffice cannot run where the worker is deployed.
+- Consequence: LibreOffice is a system package (about 300–500 MB), so the worker runs from a Docker image on Render (`render:render-docker`) instead of the native Python runtime. ShipGen gains a `.docx` rendering of some documents so DOCX is measured by the evaluation harness like the other formats.
+
+**Import from Google Drive.** Users choose files from their own Drive with Google's Picker instead of pasting links.
+- Web app: the official React wrapper `@googleworkspace/drive-picker-react` around Google's `<drive-picker>` web component (`@googleworkspace/drive-picker-element`, Apache-2.0). Configured with `client-id`, `app-id` (the Google Cloud project number), `developer-key` (an API key restricted to the Picker API), scope `https://www.googleapis.com/auth/drive.file` (the default), `multiselect`, and a docs view limited by `mime-types` to the accepted types plus Google Docs and Google Sheets.
+- `drive.file` gives per-file access only to the files the user picks, which is the least access possible and a non-sensitive scope, so no restricted-scope verification is needed. (Confirm on the Drive scopes page when building; reading picked files with `drive.file` is the documented purpose of the Picker.)
+- Flow: the element's `picker-oauth-response` event gives the browser a short-lived access token; `picker-picked` gives each file's `id`, `name`, `mimeType` and `sizeBytes`. The web app sends `POST /shipments/{id}/documents:import-drive` with the file IDs and the token. The API queues an `import_drive_files` worker task, which for each file checks `capabilities.canDownload`, downloads it with `files.get?alt=media`, or exports Google Docs to PDF and Google Sheets to XLSX with `files.export` (exports are limited to 10 MB by Google), then applies exactly the same rules as a direct upload (type from bytes, 25 MB limit, duplicates stored once) and queues `process_document`.
+- The token is used only for that task, never stored in the database and never logged; it expires within an hour. A failed file (no download permission, export too large, unsupported type) is reported back on the run's progress stream in plain words, and the other files continue.
+- Google Cloud setup (once): enable the Google Picker API and Google Drive API, create an OAuth client ID (web application, authorised JavaScript origins: the Vercel domain and `http://localhost:3000`), an API key restricted to the Picker API and those referrers, and an OAuth consent screen. New env variables (names only): `NEXT_PUBLIC_GOOGLE_CLIENT_ID`, `NEXT_PUBLIC_GOOGLE_API_KEY`, `NEXT_PUBLIC_GOOGLE_APP_ID`.
+- Rejected: pasting a Drive share link. A private file still needs the user's OAuth consent, and supporting "anyone with the link" files would encourage exporters to make trade documents public.
+- Showcase rule unchanged: while the AI runs on Gemini's free tier, only synthetic ShipGen files may be imported (Decision.md D-26).
 
 ---
 
@@ -894,7 +920,7 @@ REST over HTTPS, JSON, versioned under `/api/v1`. Auth: Bearer JWT; org taken fr
 **Screens**
 
 1. **Work queue:** shipments sorted by cut-off and risk; status chips; readiness score.
-2. **New shipment:** drag-and-drop a folder or files; live progress from SSE ("Reading invoice… Checking 31 rules…").
+2. **New shipment:** drag-and-drop files, choose them from the computer, or pick them from Google Drive; only supported types can be chosen; a duplicate is uploaded once with a soft notice after submitting; live progress from SSE ("Reading invoice… Checking 31 rules…") (Section 13.8).
 3. **Readiness report:** score; blockers first; each finding shows title, explanation, suggested fix and buttons (Accept / Dismiss / Resolve).
 4. **Evidence viewer:** split view of two documents with highlighted boxes; field table with confidence; inline correction.
 5. **Document map:** which required documents are present or missing for this shipment.
@@ -1086,6 +1112,14 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - Targeted re-read for missing or low-confidence fields; benchmark Sol vs Astra vs Luna; cost per shipment measured.
 - *Exit:* default models chosen and recorded with their numbers.
 
+**Phase 12a: Choice of AI provider, OpenAI or Gemini** (built after Phase 16, before Phase 17; Decision.md D-35)
+- Every AI step (classifier, extractor, judge, embedder, critic, drafter) gets an OpenAI implementation beside the Gemini one, on the Responses API with Structured Outputs (images for the critic) and `text-embedding-3-small` at 768 dimensions; same prompts, same JSON answers, same parsing.
+- Provider chosen in `.env`: only `GEMINI_API_KEY` set means Gemini, only `OPENAI_API_KEY` means OpenAI; with both, `AI_PROVIDER=openai|gemini` decides, and without it the API and worker refuse to start with a clear message. No key: AI steps unavailable, as today. Per-step model settings `OPENAI_*_MODEL` beside the `GEMINI_*_MODEL` ones.
+- Rate limits and overload from either provider become the same `RateLimited` wait.
+- The regulatory index records the embedding model that built it; a search with another model is refused, and the index command rebuilds it after a switch (827 passages).
+- Tests with recorded responses for both providers; the evaluation harness takes the provider from `.env`.
+- *Exit:* every step works on Gemini end to end and on OpenAI with recorded responses; the provider rule tested for each combination of keys. The live OpenAI run waits for the key.
+
 ### Stage C: Check the documents
 
 **Phase 13: Deterministic rule engine**
@@ -1108,7 +1142,12 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 
 **Phase 17: Web app, queue and upload**
 - Next.js app: login, work queue, new shipment upload with live progress.
-- *Exit:* a user can upload a bundle and watch it process.
+- Upload rules and sources (Section 13.8, Decision.md D-34):
+  - API: accept `.docx` (told apart from `.xlsx` inside the ZIP); duplicates stored once and reported in a `duplicates` list instead of 409; `POST /shipments/{id}/documents:import-drive` and the `import_drive_files` worker task.
+  - Worker: DOCX converted to PDF with headless LibreOffice, then read as a PDF; worker image moves to Docker.
+  - ShipGen and evals: some documents rendered as `.docx`, so DOCX is measured.
+  - Web app: file chooser and drop zone limited to supported types; soft duplicate notice after submitting; "Choose from Google Drive" with `@googleworkspace/drive-picker-react`.
+- *Exit:* a user can upload a bundle from the computer or Google Drive, including a Word document and a duplicate file, and watch it process; DOCX documents get page highlights like PDFs.
 
 **Phase 18: Web app, report and evidence viewer**
 - Readiness report, evidence viewer with highlights, messages (copy to clipboard), incremental re-run on corrected documents.
