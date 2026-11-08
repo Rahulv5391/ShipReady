@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 Reference = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 
@@ -140,6 +140,21 @@ class UploadOut(BaseModel):
 
     documents: list[DocumentOut]
     duplicates: list[DuplicateOut]
+
+
+class DriveFileIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{10,200}$")]
+
+
+class DriveImportIn(BaseModel):
+    """Files picked in Google Drive, and the Picker's short-lived token to fetch them with."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    access_token: Annotated[str, StringConstraints(min_length=1, max_length=4096)]
+    files: Annotated[list[DriveFileIn], Field(min_length=1)]
 
 
 class ShipmentDetail(ShipmentOut):

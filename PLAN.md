@@ -1149,6 +1149,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
   - ShipGen and evals: some documents rendered as `.docx`, so DOCX is measured.
   - Web app: file chooser and drop zone limited to supported types; soft duplicate notice after submitting; "Choose from Google Drive" with `@googleworkspace/drive-picker-react`.
 - *Exit:* a user can upload a bundle from the computer or Google Drive, including a Word document and a duplicate file, and watch it process; DOCX documents get page highlights like PDFs.
+- *Change (9 Nov 2026, Decision.md D-37):* the API fetches Drive files during the request instead of an `import_drive_files` worker task, so the Google token never enters the queue.
 
 **Phase 18: Web app, report and evidence viewer**
 - Readiness report, evidence viewer with highlights, messages (copy to clipboard), incremental re-run on corrected documents.

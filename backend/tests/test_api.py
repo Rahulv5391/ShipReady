@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
+import httpx
 import jwt
 import pytest
 from botocore.exceptions import EndpointConnectionError
@@ -21,7 +22,13 @@ from sqlalchemy.orm import Session
 from shipready import passwords, users
 from shipready.api import auth, documents, login, review, uploads
 from shipready.api.app import create_app
-from shipready.api.deps import get_enqueue, get_recheck, get_session, get_storage
+from shipready.api.deps import (
+    get_drive_client,
+    get_enqueue,
+    get_recheck,
+    get_session,
+    get_storage,
+)
 from shipready.db.models import (
     CheckResult,
     Document,
@@ -1007,3 +1014,125 @@ def test_approvals_record_the_signed_in_person(
     assert client.post(f"/api/v1/messages/{message}/approve", headers=signed_in).status_code == 200
     decisions = client.get(f"/api/v1/shipments/{shipment_id}/approvals", headers=signed_in).json()
     assert [d["decided_by"] for d in decisions] == ["rahul@demoexports.in"]
+
+
+# --- Google Drive import ---
+
+DRIVE_TOKEN = "ya29.picker-token-never-logged"
+
+
+def drive_returning(files: dict[str, tuple[str, str, bytes]]) -> httpx.Client:
+    """A Google Drive holding `files`: ID -> (name, Drive type, bytes); a Google Doc's bytes are
+    what its PDF export gives."""
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        file_id, *export = request.url.path.removeprefix("/drive/v3/files/").split("/")
+        if file_id not in files:
+            return httpx.Response(404)
+        name, kind, data = files[file_id]
+        if export or request.url.params.get("alt") == "media":
+            return httpx.Response(200, content=data)
+        info = {"name": name, "mimeType": kind, "size": str(len(data))}
+        return httpx.Response(200, json={**info, "capabilities": {"canDownload": True}})
+
+    return httpx.Client(transport=httpx.MockTransport(answer))
+
+
+def import_drive(
+    client: TestClient, shipment_id: str, *ids: str, org: uuid.UUID = DEMO_ORG_ID
+) -> Any:
+    return client.post(
+        f"/api/v1/shipments/{shipment_id}/documents:import-drive",
+        json={"access_token": DRIVE_TOKEN, "files": [{"id": i} for i in ids]},
+        headers=headers(org),
+    )
+
+
+@pytest.fixture
+def drive_files(client: TestClient) -> dict[str, tuple[str, str, bytes]]:
+    """What the fake Drive holds; tests add to it."""
+    files: dict[str, tuple[str, str, bytes]] = {}
+    client.app.dependency_overrides[get_drive_client] = lambda: drive_returning(files)  # type: ignore[attr-defined]
+    return files
+
+
+def test_drive_files_are_stored_like_uploads(
+    client: TestClient,
+    storage: Storage,
+    queued: list[uuid.UUID],
+    drive_files: dict[str, tuple[str, str, bytes]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    drive_files["invoice-id-0001"] = ("invoice.pdf", "application/pdf", PDF)
+    drive_files["po-doc-id-0001"] = (
+        "Purchase order",
+        "application/vnd.google-apps.document",
+        PDF + b"po",
+    )
+    shipment_id = new_shipment(client)
+    response = import_drive(client, shipment_id, "invoice-id-0001", "po-doc-id-0001")
+    assert response.status_code == 201, response.text
+    documents = response.json()["documents"]
+    assert [(d["filename"], d["media_type"]) for d in documents] == [
+        ("invoice.pdf", "application/pdf"),
+        ("Purchase order.pdf", "application/pdf"),
+    ]
+    assert len(stored_keys(storage)) == 2
+    assert queued == [uuid.UUID(d["id"]) for d in documents]
+    assert DRIVE_TOKEN not in caplog.text
+
+
+def test_a_drive_file_already_uploaded_is_a_duplicate(
+    client: TestClient, drive_files: dict[str, tuple[str, str, bytes]]
+) -> None:
+    shipment_id = new_shipment(client)
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    drive_files["invoice-id-0001"] = ("Invoice from Drive.pdf", "application/pdf", PDF)
+    response = import_drive(client, shipment_id, "invoice-id-0001")
+    assert response.status_code == 200
+    assert response.json()["duplicates"] == [
+        {"filename": "Invoice from Drive.pdf", "same_as": "invoice.pdf"}
+    ]
+
+
+def test_one_drive_file_that_fails_stores_none(
+    client: TestClient, storage: Storage, drive_files: dict[str, tuple[str, str, bytes]]
+) -> None:
+    drive_files["invoice-id-0001"] = ("invoice.pdf", "application/pdf", PDF)
+    drive_files["notes-id-00001"] = ("notes.pdf", "application/pdf", b"just text")
+    shipment_id = new_shipment(client)
+    missing = import_drive(client, shipment_id, "invoice-id-0001", "gone-file-0001")
+    assert (missing.status_code, missing.json()["detail"]) == (
+        422,
+        "a picked file could not be opened in Google Drive",
+    )
+    wrong_type = import_drive(client, shipment_id, "invoice-id-0001", "notes-id-00001")
+    assert wrong_type.status_code == 415
+    assert stored_keys(storage) == []
+
+
+@pytest.mark.parametrize(
+    ("body", "status"),
+    [
+        ({"access_token": "t", "files": []}, 422),
+        ({"access_token": "t", "files": [{"id": "../../etc/passwd"}]}, 422),
+        ({"access_token": "", "files": [{"id": "invoice-id-0001"}]}, 422),
+        ({"access_token": "t", "files": [{"id": f"file-id-{n:05d}"} for n in range(31)]}, 413),
+    ],
+)
+def test_bad_drive_imports_are_refused(
+    client: TestClient,
+    drive_files: dict[str, tuple[str, str, bytes]],
+    body: dict[str, object],
+    status: int,
+) -> None:
+    path = f"/api/v1/shipments/{new_shipment(client)}/documents:import-drive"
+    assert client.post(path, json=body, headers=headers()).status_code == status
+
+
+def test_drive_imports_stay_in_the_organisation(
+    client: TestClient, drive_files: dict[str, tuple[str, str, bytes]]
+) -> None:
+    drive_files["invoice-id-0001"] = ("invoice.pdf", "application/pdf", PDF)
+    response = import_drive(client, new_shipment(client), "invoice-id-0001", org=OTHER_ORG_ID)
+    assert response.status_code == 404

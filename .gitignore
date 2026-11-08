@@ -14,6 +14,7 @@ test.sh
 
 # Local config and generated data
 .env
+.env*.local
 /data/
 Decision.md
 Flow.md

@@ -1,5 +1,5 @@
-"""What a request handler receives: a database session, the storage client, the work queue and
-the caller.
+"""What a request handler receives: a database session, the storage client, the work queue, a
+client for Google Drive and the caller.
 
 Created once at startup (app.lifespan) and replaced in tests through dependency overrides.
 """
@@ -8,10 +8,12 @@ import uuid
 from collections.abc import Callable, Iterator
 from typing import Annotated
 
+import httpx
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from shipready.api.auth import Principal, current_principal
+from shipready.api.drive import TIMEOUT_S
 from shipready.storage import Storage
 
 
@@ -40,8 +42,14 @@ def get_recheck() -> Callable[[uuid.UUID], None]:
     return lambda shipment_id: extract_shipment.delay(str(shipment_id))
 
 
+def get_drive_client() -> Iterator[httpx.Client]:
+    with httpx.Client(timeout=TIMEOUT_S) as client:
+        yield client
+
+
 SessionDep = Annotated[Session, Depends(get_session)]
 EnqueueDep = Annotated[Callable[[uuid.UUID], None], Depends(get_enqueue)]
 RecheckDep = Annotated[Callable[[uuid.UUID], None], Depends(get_recheck)]
 StorageDep = Annotated[Storage, Depends(get_storage)]
 PrincipalDep = Annotated[Principal, Depends(current_principal)]
+DriveClientDep = Annotated[httpx.Client, Depends(get_drive_client)]

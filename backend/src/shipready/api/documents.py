@@ -1,8 +1,10 @@
-"""Documents: upload a shipment's files and read their metadata."""
+"""Documents: upload a shipment's files or import them from Google Drive, and read their
+metadata."""
 
 import hashlib
 import logging
 import uuid
+from collections.abc import Callable
 from typing import Annotated
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -10,9 +12,17 @@ from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 from kombu.exceptions import OperationalError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from shipready.api.deps import EnqueueDep, PrincipalDep, SessionDep, StorageDep
-from shipready.api.schemas import DocumentOut, DuplicateOut, UploadOut
+from shipready.api import drive
+from shipready.api.deps import (
+    DriveClientDep,
+    EnqueueDep,
+    PrincipalDep,
+    SessionDep,
+    StorageDep,
+)
+from shipready.api.schemas import DocumentOut, DriveImportIn, DuplicateOut, UploadOut
 from shipready.api.shipments import shipment_of
 from shipready.api.uploads import (
     MAX_FILE_BYTES,
@@ -21,7 +31,7 @@ from shipready.api.uploads import (
     media_type,
     storage_key,
 )
-from shipready.db.models import Document
+from shipready.db.models import Document, Shipment
 from shipready.runs import current_run, enter_stage, record
 from shipready.storage import Storage
 
@@ -46,10 +56,53 @@ def upload_documents(
     once and listed in `duplicates`, for the web app's soft notice (Decision.md D-34). When
     every file was a duplicate nothing changes, and the answer is 200 instead of 201."""
     shipment = shipment_of(session, principal.org_id, shipment_id)
-    if len(files) > MAX_FILES_PER_UPLOAD:
+    _check_count(len(files))
+    received = [
+        (display_name(upload.filename), upload.file.read(MAX_FILE_BYTES + 1)) for upload in files
+    ]
+    return _store(received, principal.org_id, shipment, session, storage, enqueue, response)
+
+
+@router.post("/shipments/{shipment_id}/documents:import-drive", status_code=status.HTTP_201_CREATED)
+def import_from_drive(
+    shipment_id: uuid.UUID,
+    body: DriveImportIn,
+    principal: PrincipalDep,
+    session: SessionDep,
+    storage: StorageDep,
+    enqueue: EnqueueDep,
+    drive_client: DriveClientDep,
+    response: Response,
+) -> UploadOut:
+    """Fetch the files picked in Google Drive with the browser's short-lived token, then store
+    them exactly as an upload: the same checks, all or none, duplicates stored once. The token
+    is used for this request only (Decision.md D-37)."""
+    shipment = shipment_of(session, principal.org_id, shipment_id)
+    _check_count(len(body.files))
+    try:
+        received = [drive.fetch(drive_client, body.access_token, f.id) for f in body.files]
+    except drive.DriveError as error:
+        raise HTTPException(error.status, str(error)) from None
+    return _store(received, principal.org_id, shipment, session, storage, enqueue, response)
+
+
+def _check_count(count: int) -> None:
+    if count > MAX_FILES_PER_UPLOAD:
         raise HTTPException(
             status.HTTP_413_CONTENT_TOO_LARGE, f"at most {MAX_FILES_PER_UPLOAD} files per upload"
         )
+
+
+def _store(
+    received: list[tuple[str, bytes]],
+    org_id: uuid.UUID,
+    shipment: Shipment,
+    session: Session,
+    storage: Storage,
+    enqueue: Callable[[uuid.UUID], None],
+    response: Response,
+) -> UploadOut:
+    """Check, store and queue received files, however they arrived (`upload_documents`)."""
     stored_as = {
         digest: filename
         for digest, filename in session.execute(
@@ -58,9 +111,7 @@ def upload_documents(
     }
     documents: list[tuple[Document, bytes]] = []
     duplicates: list[DuplicateOut] = []
-    for upload in files:
-        name = display_name(upload.filename)
-        data = upload.file.read(MAX_FILE_BYTES + 1)
+    for name, data in received:
         if not data:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{name} is empty")
         if len(data) > MAX_FILE_BYTES:
@@ -82,13 +133,13 @@ def upload_documents(
         document_id = uuid.uuid4()
         document = Document(
             id=document_id,
-            org_id=principal.org_id,
+            org_id=org_id,
             shipment_id=shipment.id,
             filename=name,
             media_type=kind,
             size_bytes=len(data),
             sha256=digest,
-            storage_key=storage_key(principal.org_id, shipment.id, document_id, name),
+            storage_key=storage_key(org_id, shipment.id, document_id, name),
         )
         documents.append((document, data))
     if not documents:
