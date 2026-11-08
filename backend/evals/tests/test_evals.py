@@ -32,6 +32,7 @@ class TruthPipeline:
     """Cheats by reading the answers, so every measure must come out perfect."""
 
     name = "truth"
+    models: tuple[str, ...] = ("truth-model-1",)
 
     def run(self, folder: Path, files: tuple[str, ...]) -> Prediction:
         this = load_case(folder)
@@ -42,6 +43,7 @@ class AlarmPipeline:
     """Reports the same rule on every shipment."""
 
     name = "alarm"
+    models: tuple[str, ...] = ()
 
     def run(self, folder: Path, files: tuple[str, ...]) -> Prediction:
         return Prediction(findings=frozenset({"QTY-01"}))
@@ -159,7 +161,12 @@ def test_report_and_gate(dataset: Path, tmp_path: Path) -> None:
     folder = write_report(result, tmp_path)
     report = json.loads((folder / "report.json").read_text("utf-8"))
     assert report["cases"] == len(result.results)
+    assert report["models"] == []
     assert "| finding_recall |" in (folder / "summary.md").read_text("utf-8")
+    assert "AI models: none." in (folder / "summary.md").read_text("utf-8")
+    truth = write_report(run(TruthPipeline(), dataset, "dev"), tmp_path)
+    assert json.loads((truth / "report.json").read_text("utf-8"))["models"] == ["truth-model-1"]
+    assert "AI models: truth-model-1." in (truth / "summary.md").read_text("utf-8")
 
     baseline = baseline_of(result)
     assert regressions(result, baseline) == []
@@ -290,6 +297,15 @@ class AgreeingJudge:
         return [Verdict(q.id, True, 1.0, "") for q in questions]
 
 
+class UnusedEmbedder:
+    """Never asked: NoCitations stands in for the search."""
+
+    model = "unused-embedder"
+
+    def embed(self, texts: list[str], query: bool) -> list[list[float]]:
+        raise AssertionError("the search is replaced in this test")
+
+
 class NoCitations:
     def cite(self, rule_id: str) -> None:
         return None
@@ -302,10 +318,11 @@ def test_checks_on_labels_find_the_planted_errors(
     monkeypatch.setattr("evals.pipeline.make_engine", lambda: None)
     monkeypatch.setattr("evals.pipeline.DbReference", lambda session: SnapshotReference())
     monkeypatch.setattr("evals.pipeline.judge_from_env", AgreeingJudge)
-    monkeypatch.setattr("evals.pipeline.embedder_from_env", lambda: None)
+    monkeypatch.setattr("evals.pipeline.embedder_from_env", UnusedEmbedder)
     monkeypatch.setattr("evals.pipeline.DbKnowledge", lambda session, embedder: NoCitations())
     monkeypatch.setattr("evals.pipeline.ANSWER_CACHE", tmp_path)
     result = run(PIPELINES["checks-on-labels"](), dataset, "dev")
+    assert result.models == ("agreeing", "unused-embedder")
     metrics = result.metrics
     assert metrics["det_recall"] == metrics["det_precision"] == 1.0
     assert metrics["finding_precision"] == 1.0

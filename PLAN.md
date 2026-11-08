@@ -1119,6 +1119,7 @@ One developer, so phases run in sequence and are tracked by exit criteria rather
 - The regulatory index records the embedding model that built it; a search with another model is refused, and the index command rebuilds it after a switch (827 passages).
 - Tests with recorded responses for both providers; the evaluation harness takes the provider from `.env`.
 - *Exit:* every step works on Gemini end to end and on OpenAI with recorded responses; the provider rule tested for each combination of keys. The live OpenAI run waits for the key.
+- *Done 8 Nov 2026:* exit met on Gemini and recorded OpenAI answers; the live OpenAI run is still owed.
 
 ### Stage C: Check the documents
 

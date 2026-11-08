@@ -71,6 +71,8 @@ class Prediction:
 
 class Pipeline(Protocol):
     name: str
+    # The AI models it asks, so a report says which provider's answers it scored (D-35).
+    models: tuple[str, ...]
 
     def run(self, folder: Path, files: tuple[str, ...]) -> Prediction: ...
 
@@ -79,6 +81,7 @@ class EmptyPipeline:
     """Reads nothing and reports nothing: the floor every real pipeline must beat."""
 
     name = "empty"
+    models: tuple[str, ...] = ()
 
     def run(self, folder: Path, files: tuple[str, ...]) -> Prediction:
         return Prediction()
@@ -92,9 +95,14 @@ class ClassifyPipeline:
         self.mode = mode
         self.name = {"never": "rules", "fallback": "rules+ai", "always": "ai"}[mode]
         self.ai: PageClassifier | None = None
+        self.models: tuple[str, ...] = ()
         if mode != "never":
-            model = model_from_env("classify", f"the {self.name} pipeline")
+            try:
+                model = model_from_env("classify", f"the {self.name} pipeline")
+            except RuntimeError as error:
+                raise ValueError(str(error)) from error
             self.ai = _PatientClassifier(AiClassifier(model))
+            self.models = (model.model,)
 
     def run(self, folder: Path, files: tuple[str, ...]) -> Prediction:
         predicted, _ = read_documents(folder, files, self.mode, self.ai)
@@ -112,6 +120,7 @@ class ExtractPipeline:
             extractor = extractor_from_env()
         except RuntimeError as error:
             raise ValueError(str(error)) from error
+        self.models: tuple[str, ...] = (extractor.model,)
         self.extractor = _PatientExtractor(CachedExtractor(extractor, ANSWER_CACHE))
 
     def run(self, folder: Path, files: tuple[str, ...]) -> Prediction:
@@ -159,15 +168,19 @@ class ChecksPipeline:
     def __init__(self, on_labels: bool, critic: bool = False) -> None:
         self.name = "checks-on-labels" if on_labels else "checks+critic" if critic else "checks"
         self.extract = None if on_labels else ExtractPipeline()
-        self.critic = (
-            CachedCritic(_PatientCritic(critic_from_env()), ANSWER_CACHE) if critic else None
+        try:
+            judge, embedder = judge_from_env(), embedder_from_env()
+            reviewer = critic_from_env() if critic else None
+        except RuntimeError as error:
+            raise ValueError(str(error)) from error
+        self.critic = CachedCritic(_PatientCritic(reviewer), ANSWER_CACHE) if reviewer else None
+        self.models = (
+            (self.extract.models if self.extract else ())
+            + (judge.model, embedder.model)
+            + ((reviewer.model,) if reviewer else ())
         )
         self.session = Session(make_engine())
         self.reference = DbReference(self.session)
-        try:
-            judge, embedder = judge_from_env(), embedder_from_env()
-        except RuntimeError as error:
-            raise ValueError(str(error)) from error
         self.judge = CachedJudge(_PatientJudge(judge), ANSWER_CACHE)
         self.knowledge = DbKnowledge(self.session, embedder)
 

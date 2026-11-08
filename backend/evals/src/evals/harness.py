@@ -21,6 +21,7 @@ UNGATED = {"latency_p50_s", "latency_p95_s"}
 @dataclass(frozen=True)
 class Run:
     pipeline: str
+    models: tuple[str, ...]  # the AI models asked; empty for a pipeline without AI
     split: Split
     dataset: Path
     git_sha: str | None
@@ -41,6 +42,7 @@ def run(pipeline: Pipeline, dataset: Path, split: Split) -> Run:
         results.append(score_case(case, prediction, time.perf_counter() - start))
     return Run(
         pipeline=pipeline.name,
+        models=pipeline.models,
         split=split,
         dataset=dataset,
         git_sha=_git_sha(),
@@ -61,6 +63,7 @@ def write_report(result: Run, out: Path) -> Path:
     folder.mkdir(parents=True)
     report = {
         "pipeline": result.pipeline,
+        "models": list(result.models),
         "split": result.split,
         "dataset": str(result.dataset),
         "git_sha": result.git_sha,
@@ -99,6 +102,7 @@ def summary(result: Run) -> str:
         "",
         f"{len(result.results)} cases from {result.dataset}, commit {result.git_sha or 'unknown'}, "
         f"{result.started:%Y-%m-%d %H:%M} UTC.",
+        f"AI models: {', '.join(result.models) or 'none'}.",
         "",
         "| Measure | Value | Target | Met |",
         "|---|---|---|---|",
