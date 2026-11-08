@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
+from shipready.ai import ai_provider
 from shipready.api import documents, review, shipments
 from shipready.api.auth import secret
 from shipready.db.session import make_engine
@@ -19,6 +20,7 @@ from shipready.storage import make_storage, settings_from_env
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     secret()  # refuse to start without a signing key, rather than fail every request
+    ai_provider()  # and with an unclear choice of AI provider
     engine = make_engine()
     app.state.engine = engine
     app.state.storage = make_storage(settings_from_env())

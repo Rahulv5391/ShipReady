@@ -603,3 +603,13 @@ def test_an_unreadable_file_fails_its_run(
     (run,) = session.scalars(select(Run))
     assert run.status == "failed" and run.error is not None
     assert run.error.startswith("file could not be read:")
+
+
+def test_worker_refuses_to_start_with_two_keys_and_no_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    monkeypatch.setenv("OPENAI_API_KEY", "o")
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    with pytest.raises(SystemExit, match="set AI_PROVIDER"):
+        worker._check_settings()

@@ -278,3 +278,46 @@ def test_drafter_request_and_answer(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_a_draft_that_leaves_out_a_problem_is_refused(text: str) -> None:
     with pytest.raises(ValueError, match="unexpected AI answer"):
         ai.parse_drafts(text, {"forwarder": 2})
+
+
+@pytest.mark.parametrize(
+    ("keys", "chosen", "provider"),
+    [
+        ({}, "", None),
+        ({"GEMINI_API_KEY": "g"}, "", "gemini"),
+        ({"OPENAI_API_KEY": "o"}, "", "openai"),
+        ({"GEMINI_API_KEY": "g", "OPENAI_API_KEY": "o"}, "openai", "openai"),
+        ({"GEMINI_API_KEY": "g", "OPENAI_API_KEY": "o"}, "gemini", "gemini"),
+        ({"OPENAI_API_KEY": "o"}, "openai", "openai"),
+    ],
+)
+def test_provider_from_the_keys(
+    monkeypatch: pytest.MonkeyPatch, keys: dict[str, str], chosen: str, provider: str | None
+) -> None:
+    for name in ai.PROVIDER_KEYS.values():
+        monkeypatch.delenv(name, raising=False)
+    for name, value in keys.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("AI_PROVIDER", chosen)
+    assert ai.ai_provider() == provider
+
+
+@pytest.mark.parametrize(
+    ("keys", "chosen", "message"),
+    [
+        ({"GEMINI_API_KEY": "g", "OPENAI_API_KEY": "o"}, "", "set AI_PROVIDER=gemini or"),
+        ({"GEMINI_API_KEY": "g"}, "openai", "AI_PROVIDER=openai needs OPENAI_API_KEY"),
+        ({}, "gemini", "AI_PROVIDER=gemini needs GEMINI_API_KEY"),
+        ({"GEMINI_API_KEY": "g"}, "claude", "AI_PROVIDER must be one of"),
+    ],
+)
+def test_an_unclear_provider_is_refused(
+    monkeypatch: pytest.MonkeyPatch, keys: dict[str, str], chosen: str, message: str
+) -> None:
+    for name in ai.PROVIDER_KEYS.values():
+        monkeypatch.delenv(name, raising=False)
+    for name, value in keys.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("AI_PROVIDER", chosen)
+    with pytest.raises(RuntimeError, match=message):
+        ai.ai_provider()

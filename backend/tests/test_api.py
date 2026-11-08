@@ -428,6 +428,17 @@ def test_app_refuses_to_start_without_a_secret(monkeypatch: pytest.MonkeyPatch) 
         pass
 
 
+def test_app_refuses_to_start_with_two_keys_and_no_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(auth.SECRET_VARIABLE, SECRET)
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    monkeypatch.setenv("OPENAI_API_KEY", "o")
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    with pytest.raises(RuntimeError, match="set AI_PROVIDER"), TestClient(create_app()):
+        pass
+
+
 # --- extracted fields ---
 
 

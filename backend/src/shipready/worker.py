@@ -20,6 +20,7 @@ from functools import cache
 from typing import Any
 
 from celery import Celery
+from celery.signals import worker_init
 from PIL import Image
 from sqlalchemy import Engine, delete, select
 from sqlalchemy.orm import Session
@@ -32,6 +33,7 @@ from shipready.ai import (
     PageClassifier,
     RateLimited,
     ai_mode,
+    ai_provider,
     classifier_from_env,
     critic_from_env,
     drafter_from_env,
@@ -76,6 +78,20 @@ app.conf.update(
     broker_connection_timeout=5,
     task_publish_retry_policy={"max_retries": 2, "interval_start": 0.5, "interval_step": 1},
 )
+
+
+def _check_settings(**_: object) -> None:
+    """Refuse to start with an unclear choice of AI provider, rather than fail every task.
+
+    Celery logs and ignores an exception from a signal handler, so the error becomes an exit.
+    """
+    try:
+        ai_provider()
+    except RuntimeError as error:
+        raise SystemExit(f"shipready worker: {error}") from error
+
+
+worker_init.connect(_check_settings)
 
 
 # An explicit name: `python -m shipready.worker requeue` loads this module as __main__, and

@@ -27,6 +27,9 @@ from shipready.extract import DocumentText, RawField
 
 AiMode = Literal["never", "fallback", "always"]
 AI_MODES: tuple[AiMode, ...] = ("never", "fallback", "always")
+Provider = Literal["gemini", "openai"]
+PROVIDERS: tuple[Provider, ...] = ("gemini", "openai")
+PROVIDER_KEYS: dict[Provider, str] = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 # Reading every field of a shipment needs a larger model: Flash-Lite stopped after a quarter of
 # the fields in a trial, Flash read 97% correctly (Decision.md D-28).
@@ -378,6 +381,29 @@ def ai_mode() -> AiMode:
     if mode not in AI_MODES:
         raise RuntimeError(f"CLASSIFY_WITH_AI must be one of {AI_MODES}, got {mode!r}")
     return mode
+
+
+def ai_provider() -> Provider | None:
+    """The provider whose key is set, or None without a key (Decision.md D-35).
+
+    With both keys AI_PROVIDER must say which, so a stale key left in .env never switches the
+    provider unnoticed.
+    """
+    keyed = [provider for provider in PROVIDERS if os.environ.get(PROVIDER_KEYS[provider])]
+    chosen = os.environ.get("AI_PROVIDER")
+    if chosen:
+        provider = next((p for p in PROVIDERS if p == chosen), None)
+        if provider is None:
+            raise RuntimeError(f"AI_PROVIDER must be one of {PROVIDERS}, got {chosen!r}")
+        if provider not in keyed:
+            raise RuntimeError(f"AI_PROVIDER={provider} needs {PROVIDER_KEYS[provider]}")
+        return provider
+    if len(keyed) > 1:
+        raise RuntimeError(
+            "both GEMINI_API_KEY and OPENAI_API_KEY are set; "
+            "set AI_PROVIDER=gemini or AI_PROVIDER=openai"
+        )
+    return keyed[0] if keyed else None
 
 
 def classifier_from_env() -> PageClassifier | None:
