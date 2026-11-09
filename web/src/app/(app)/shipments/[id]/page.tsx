@@ -29,6 +29,8 @@ import type {
   ShipmentDetail,
 } from "@/lib/types";
 
+import { MessageCard, ReviewActions, type ReviewState } from "./review";
+
 export const metadata: Metadata = { title: "Readiness report" };
 
 const CIRCLE = 2 * Math.PI * 48; // the score ring's circumference
@@ -51,7 +53,9 @@ async function load(id: string): Promise<Data> {
       api<RunOut[]>(`/shipments/${id}/runs`),
     ]);
     const events = runs.length > 0 ? await api<EventOut[]>(`/runs/${runs[0].id}/log`) : [];
-    return { shipment, checks, messages, approvals, events };
+    // Messages of earlier runs were decided then; their decisions stay in the activity.
+    const current = messages.filter((m) => m.run_id === runs[0]?.id);
+    return { shipment, checks, messages: current, approvals, events };
   } catch (error) {
     if (error instanceof ApiError && (error.status === 404 || error.status === 422)) notFound();
     throw error;
@@ -164,6 +168,15 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
     .sort((a, b) => b.at.localeCompare(a.at) || b.order - a.order);
   const files = shipment.documents.length;
   const found = shipment.documents.reduce((sum, d) => sum + d.parts.length, 0);
+  const state: ReviewState =
+    shipment.run?.status === "awaiting_review" ? "review" : shipment.run?.status === "running" ? "running" : "closed";
+  const blockers = checks.filter((c) => c.outcome === "fail" && c.severity === "blocker").length;
+  const decision =
+    state === "closed"
+      ? approvals
+          .filter((a) => a.action === "mark_ready" || a.action === "mark_needs_fix")
+          .sort((a, b) => b.decided_at.localeCompare(a.decided_at))[0]
+      : undefined;
 
   return (
     <>
@@ -174,12 +187,20 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
         </svg>
         <span className="font-mono text-ink">{shipment.reference}</span>
       </nav>
-      <div className="flex flex-col gap-1.5">
-        <h1 className="text-balance font-display text-[30px] font-bold leading-[1.15] tracking-[-0.025em]">{title}</h1>
-        <p className="text-base text-muted">
-          Shipment <span className="font-mono text-ink">{shipment.reference}</span>
-          {route ? `, ${route}` : ""}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <h1 className="text-balance font-display text-[30px] font-bold leading-[1.15] tracking-[-0.025em]">{title}</h1>
+          <p className="text-base text-muted">
+            Shipment <span className="font-mono text-ink">{shipment.reference}</span>
+            {route ? `, ${route}` : ""}
+          </p>
+          {decision && (
+            <p className="text-[14px]">
+              <b>{approvalLine(decision).what}</b> {approvalLine(decision).detail}, {timeAgo(decision.decided_at)}
+            </p>
+          )}
+        </div>
+        <ReviewActions shipmentId={id} state={state} blockers={blockers} />
       </div>
 
       <section aria-label="Verdict" className="flex flex-wrap items-center gap-x-8 gap-y-5 rounded-[14px] border border-line bg-surface p-6">
@@ -290,22 +311,31 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
                 {messages.map((message) => {
                   const to = RECIPIENTS[message.recipient] ?? message.recipient;
                   return (
-                    <li key={message.id} className="flex items-center gap-2.5">
-                      <span className="grid size-8 flex-none place-items-center rounded-full bg-primary-soft text-[12px] font-bold text-primary">{initials(to)}</span>
-                      <span className="flex min-w-0 flex-1 flex-col">
-                        <span className="font-semibold">{to}</span>
-                        <span className="truncate text-[13px] text-muted" title={message.subject}>{message.subject}</span>
-                      </span>
-                      <span className={`rounded-md px-2 py-0.5 text-[12px] font-semibold capitalize ${message.status === "approved" ? "bg-ready-soft text-ready" : message.status === "discarded" ? "bg-sunken text-muted" : "bg-review-soft text-review"}`}>
-                        {message.status}
-                      </span>
+                    <li key={message.id}>
+                      <details className="group">
+                        <summary className="flex cursor-pointer list-none items-center gap-2.5 rounded-lg py-1 [&::-webkit-details-marker]:hidden">
+                          <span className="grid size-8 flex-none place-items-center rounded-full bg-primary-soft text-[12px] font-bold text-primary">{initials(to)}</span>
+                          <span className="flex min-w-0 flex-1 flex-col">
+                            <span className="font-semibold">{to}</span>
+                            <span className="truncate text-[13px] text-muted group-open:whitespace-normal" title={message.subject}>{message.subject}</span>
+                          </span>
+                          <span className={`rounded-md px-2 py-0.5 text-[12px] font-semibold capitalize ${message.status === "approved" ? "bg-ready-soft text-ready" : message.status === "discarded" ? "bg-sunken text-muted" : "bg-review-soft text-review"}`}>
+                            {message.status}
+                          </span>
+                        </summary>
+                        <div className="pt-3">
+                          <MessageCard key={`${message.id}-${message.status}`} shipmentId={id} message={message} to={to} />
+                        </div>
+                      </details>
                     </li>
                   );
                 })}
               </ul>
             )}
             {drafts.length > 0 && (
-              <p className="text-[13px] text-muted">{drafts.length} {drafts.length === 1 ? "draft waits" : "drafts wait"} for your approval.</p>
+              <p className="text-[13px] text-muted">
+                {drafts.length} {drafts.length === 1 ? "draft waits" : "drafts wait"} for your approval. Open one to read, edit and approve it.
+              </p>
             )}
           </section>
 

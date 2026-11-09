@@ -80,6 +80,7 @@ export type ShipmentDetail = ShipmentListItem & {
 
 export type MessageOut = {
   id: string;
+  run_id: string;
   recipient: string;
   subject: string;
   body: string;

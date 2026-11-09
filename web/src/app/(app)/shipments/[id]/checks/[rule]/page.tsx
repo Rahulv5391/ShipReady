@@ -6,8 +6,10 @@ import { Suspense } from "react";
 
 import { ApiError, api } from "@/lib/api";
 import { TEXT_SOURCES, neighbours, parseView, printedDiffers, sheetsFor, type Sheet } from "@/lib/evidence";
-import { SEVERITY_LABELS, fieldLabel } from "@/lib/report";
-import type { CheckOut, FieldOut, PageOut, ShipmentDetail } from "@/lib/types";
+import { RECIPIENTS, SEVERITY_LABELS, fieldLabel, initials } from "@/lib/report";
+import type { CheckOut, FieldOut, MessageOut, PageOut, RunOut, ShipmentDetail } from "@/lib/types";
+
+import { MessageCard } from "../../review";
 
 export const metadata: Metadata = { title: "Evidence" };
 
@@ -18,10 +20,12 @@ type Query = { view?: string; all?: string };
 
 async function load(id: string, rule: string) {
   try {
-    const [shipment, checks, fields] = await Promise.all([
+    const [shipment, checks, fields, messages, runs] = await Promise.all([
       api<ShipmentDetail>(`/shipments/${id}`),
       api<CheckOut[]>(`/shipments/${id}/checks`),
       api<FieldOut[]>(`/shipments/${id}/fields`),
+      api<MessageOut[]>(`/shipments/${id}/messages`),
+      api<RunOut[]>(`/shipments/${id}/runs`),
     ]);
     const check = checks.find((c) => c.rule_id === rule);
     if (!check) notFound();
@@ -32,7 +36,7 @@ async function load(id: string, rule: string) {
     )) {
       for (const page of list) pages.set(`${documentId}:${page.page_no}`, page);
     }
-    return { shipment, checks, check, fields, pages };
+    return { shipment, checks, check, fields, pages, messages: messages.filter((m) => m.run_id === runs[0]?.id && m.rule_ids.includes(rule)) };
   } catch (error) {
     if (error instanceof ApiError && (error.status === 404 || error.status === 422)) notFound();
     throw error;
@@ -114,7 +118,7 @@ function PageView({ sheet, page, filename }: { sheet: Sheet; page: PageOut | und
 
 async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: string }>; query: Promise<Query> }) {
   const [{ id, rule }, { view, all }] = await Promise.all([ids, query]);
-  const { shipment, checks, check, fields, pages } = await load(id, decodeURIComponent(rule));
+  const { shipment, checks, check, fields, pages, messages } = await load(id, decodeURIComponent(rule));
   const outlineAll = all === "1";
   const sheets = sheetsFor(check, outlineAll ? fields : []);
   const shown = parseView(view, sheets.length);
@@ -257,6 +261,20 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
             Back to the report
           </Link>
         </section>
+
+        {messages.map((message) => {
+          const to = RECIPIENTS[message.recipient] ?? message.recipient;
+          return (
+            <section key={message.id} aria-label={`Message to ${to}`} className="flex min-w-0 flex-[1_1_300px] flex-col gap-3 rounded-[14px] border border-line bg-surface p-5">
+              <div className="flex items-center gap-2.5">
+                <span className="grid size-8 flex-none place-items-center rounded-full bg-primary-soft text-[12px] font-bold text-primary">{initials(to)}</span>
+                <span className="flex-1 font-semibold">To {to}</span>
+                <span className="rounded-md bg-sunken px-2 py-0.5 text-[12px] font-semibold capitalize">{message.status}</span>
+              </div>
+              <MessageCard key={`${message.id}-${message.status}`} shipmentId={id} message={message} to={to} />
+            </section>
+          );
+        })}
       </div>
     </>
   );
