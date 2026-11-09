@@ -39,7 +39,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 /** The API's error message ({"detail": ...}), or the status when there is none. */
-export async function detail(response: Response): Promise<string> {
+async function detail(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { detail?: unknown };
     if (typeof body.detail === "string") return body.detail;

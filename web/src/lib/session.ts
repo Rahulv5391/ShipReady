@@ -10,7 +10,7 @@ import { tokenExpired } from "@/lib/token";
  * scripts never see the token (Decision.md D-38). Only server code reads or sets them.
  */
 export const SESSION_COOKIE = "shipready_session";
-export const USER_COOKIE = "shipready_user";
+const USER_COOKIE = "shipready_user";
 
 export type SessionUser = { email: string; name: string; orgId: string };
 export type Session = { token: string; user: SessionUser };

@@ -27,7 +27,7 @@ export type ShipmentListItem = {
   updated_at: string;
 };
 
-export type DocumentOut = {
+type DocumentOut = {
   id: string;
   filename: string;
   media_type: string;
@@ -72,7 +72,7 @@ export type CheckOut = {
   critic_reason: string;
 };
 
-export type PartOut = { first_page: number; last_page: number; doc_type: string };
+type PartOut = { first_page: number; last_page: number; doc_type: string };
 
 export type ShipmentDetail = ShipmentListItem & {
   documents: (DocumentOut & { parts: PartOut[] })[];

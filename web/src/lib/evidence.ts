@@ -5,7 +5,7 @@ import type { CheckOut, FieldOut } from "@/lib/types";
 
 /** A value outlined on a page: numbered when the check read it, unnumbered when shown only
  * because every value read is outlined. */
-export type Mark = { n: number | null; field: FieldOut };
+type Mark = { n: number | null; field: FieldOut };
 
 export type Sheet = { key: string; documentId: string; pageNo: number; label: string; marks: Mark[] };
 

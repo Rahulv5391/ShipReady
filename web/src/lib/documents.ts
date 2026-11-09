@@ -4,10 +4,10 @@
 export const MAX_FILES = 30;
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
-export const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".xlsx", ".jpg", ".jpeg", ".png", ".tif", ".tiff"];
+const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".xlsx", ".jpg", ".jpeg", ".png", ".tif", ".tiff"];
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-export const ACCEPTED_TYPES = ["application/pdf", DOCX, XLSX, "image/jpeg", "image/png", "image/tiff"];
+const ACCEPTED_TYPES = ["application/pdf", DOCX, XLSX, "image/jpeg", "image/png", "image/tiff"];
 /** For <input accept>: only these can be chosen, so nothing is refused after choosing. */
 export const ACCEPT = [...ACCEPTED_EXTENSIONS, ...ACCEPTED_TYPES].join(",");
 /** What the Google Picker lists: the same types, and Google Docs and Sheets, which convert. */

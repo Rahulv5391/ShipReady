@@ -214,8 +214,8 @@ export function Progress({
         >
           Add more files
         </button>
-        <Link href="/shipments" className="flex min-h-11 items-center rounded-[10px] bg-primary px-4 font-semibold text-primary-ink">
-          Back to shipments
+        <Link href={`/shipments/${shipmentId}`} className="flex min-h-11 items-center rounded-[10px] bg-primary px-4 font-semibold text-primary-ink">
+          Open the report
         </Link>
       </div>
     </section>

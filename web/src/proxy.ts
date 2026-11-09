@@ -1,8 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { SESSION_COOKIE } from "@/lib/session";
 import { tokenExpired } from "@/lib/token";
-
-const SESSION_COOKIE = "shipready_session";
 
 /**
  * A quick check before each page: without a current session a person is sent to sign in, and a
