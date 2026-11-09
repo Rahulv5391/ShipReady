@@ -48,3 +48,51 @@ export type RunOut = {
   stage: RunBrief["stage"];
   error: string | null;
 };
+
+export type Severity = "blocker" | "major" | "minor" | "info";
+
+export type FieldOut = {
+  path: string;
+  value: string;
+  quote: string;
+  document_id: string;
+  page_no: number;
+  box: { x0: number; y0: number; x1: number; y1: number } | null;
+};
+
+export type CheckOut = {
+  rule_id: string;
+  title: string;
+  severity: Severity;
+  outcome: "pass" | "fail" | "not_verified";
+  message: string;
+  evidence: FieldOut[];
+  citations: { source_id: string; title: string; url: string; page: number | null; text: string }[];
+  verification: "kept" | "misread" | null;
+  critic_reason: string;
+};
+
+export type PartOut = { first_page: number; last_page: number; doc_type: string };
+
+export type ShipmentDetail = ShipmentListItem & {
+  documents: (DocumentOut & { parts: PartOut[] })[];
+};
+
+export type MessageOut = {
+  id: string;
+  recipient: string;
+  subject: string;
+  body: string;
+  rule_ids: string[];
+  status: "draft" | "approved" | "discarded";
+};
+
+export type ApprovalOut = {
+  id: string;
+  action: "mark_ready" | "mark_needs_fix" | "approve_message" | "discard_message";
+  decided_by: string;
+  reason: string | null;
+  decided_at: string;
+};
+
+export type EventOut = { id: number; type: string; data: Record<string, unknown>; at: string };

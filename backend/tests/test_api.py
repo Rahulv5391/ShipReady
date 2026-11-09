@@ -194,6 +194,8 @@ def test_create_and_read_a_shipment(client: TestClient) -> None:
     assert (body["reference"], body["mode"], body["status"]) == ("JOB-001", "sea", "RECEIVED")
     assert (body["readiness"], body["readiness_score"]) == (None, None)  # not checked yet
     assert body["documents"] == []
+    # The same summary as in the list: nothing read yet.
+    assert (body["exporter"], body["files"], body["run"]) == (None, 0, None)
 
 
 @pytest.mark.parametrize(
@@ -1406,4 +1408,21 @@ def test_replacing_waits_for_the_run_and_checks_the_file(
         files={"file": ("x.pdf", SECOND_PDF)},
         headers=headers(OTHER_ORG_ID),
     )
+    assert other.status_code == 404
+
+
+def test_a_runs_events_are_listed_once(client: TestClient, session: Session) -> None:
+    shipment_id = new_shipment(client)
+    upload(client, shipment_id, ("invoice.pdf", PDF))
+    run = under_review(session, shipment_id)
+    log = client.get(f"/api/v1/runs/{run.id}/log", headers=headers()).json()
+    assert [e["type"] for e in log] == [
+        "run_started",
+        "files_uploaded",
+        "stage_started",
+        "awaiting_review",
+    ]
+    assert log[1]["data"] == {"files": ["invoice.pdf"]}
+    assert [e["id"] for e in log] == sorted(e["id"] for e in log)
+    other = client.get(f"/api/v1/runs/{run.id}/log", headers=headers(OTHER_ORG_ID))
     assert other.status_code == 404

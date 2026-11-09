@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -192,8 +192,19 @@ class DriveImportIn(BaseModel):
     files: Annotated[list[DriveFileIn], Field(min_length=1)]
 
 
-class ShipmentDetail(ShipmentOut):
+class ShipmentDetail(ShipmentListItem):
     documents: list[DocumentOut]
+
+
+class EventOut(BaseModel):
+    """A step of a run, as the live stream sends it, for the shipment's activity."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    type: str
+    data: dict[str, Any]
+    at: datetime
 
 
 class RunOut(BaseModel):

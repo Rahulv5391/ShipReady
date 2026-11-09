@@ -15,7 +15,14 @@ from sqlalchemy import Connection, Engine, select
 from sqlalchemy.orm import Session
 
 from shipready.api.deps import PrincipalDep, RecheckDep, SessionDep
-from shipready.api.schemas import ApprovalOut, Decision, MessageEdit, MessageOut, RunOut
+from shipready.api.schemas import (
+    ApprovalOut,
+    Decision,
+    EventOut,
+    MessageEdit,
+    MessageOut,
+    RunOut,
+)
 from shipready.api.shipments import shipment_of
 from shipready.db.models import (
     Approval,
@@ -76,6 +83,17 @@ def recheck(
 @router.get("/runs/{run_id}")
 def get_run(run_id: uuid.UUID, principal: PrincipalDep, session: SessionDep) -> RunOut:
     return RunOut.model_validate(run_of(session, principal.org_id, run_id))
+
+
+@router.get("/runs/{run_id}/log")
+def run_log(run_id: uuid.UUID, principal: PrincipalDep, session: SessionDep) -> list[EventOut]:
+    """The run's events so far, in order, as a list: for a page that shows the activity once
+    (the live stream at /events stays open while the run waits for review)."""
+    run = run_of(session, principal.org_id, run_id)
+    events = session.scalars(
+        select(RunEvent).where(RunEvent.run_id == run.id).order_by(RunEvent.id)
+    )
+    return [EventOut.model_validate(event) for event in events]
 
 
 @router.get("/runs/{run_id}/events")

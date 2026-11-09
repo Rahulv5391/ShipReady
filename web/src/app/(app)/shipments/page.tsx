@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Suspense, type ReactNode } from "react";
+import { Suspense } from "react";
 
+import { ToneIcon, TONES } from "@/components/tone";
 import { api } from "@/lib/api";
 import { MODES, READINESS, countryName, progress, timeAgo, type Tone } from "@/lib/format";
 import {
@@ -24,25 +25,11 @@ const PAGE = 200;
 const GRID =
   "grid grid-cols-[minmax(190px,2fr)_minmax(150px,1.4fr)_minmax(150px,1.2fr)_minmax(150px,1.3fr)_128px_116px_76px] gap-3.5";
 
-const TONES: Record<Tone, { fg: string; soft: string }> = {
-  fix: { fg: "text-fix", soft: "bg-fix-soft" },
-  review: { fg: "text-review", soft: "bg-review-soft" },
-  ready: { fg: "text-ready", soft: "bg-ready-soft" },
-  running: { fg: "text-primary", soft: "bg-primary-soft" },
-  idle: { fg: "text-muted", soft: "bg-sunken" },
-};
 const DOTS: Record<Tone, string> = {
   fix: "bg-fix",
   review: "bg-review",
   ready: "bg-ready",
   running: "bg-primary shadow-[0_0_0_4px_var(--ring-run)]",
-  idle: "bg-idle",
-};
-const BARS: Record<Tone, string> = {
-  fix: "bg-fix",
-  review: "bg-review",
-  ready: "bg-ready",
-  running: "bg-primary",
   idle: "bg-idle",
 };
 const FILTER_TONES: Record<Filter, Tone> = {
@@ -51,26 +38,6 @@ const FILTER_TONES: Record<Filter, Tone> = {
   ready: "ready",
   active: "running",
 };
-
-function ToneIcon({ tone }: { tone: Tone }) {
-  const paths: Record<Tone, ReactNode> = {
-    fix: <path d="M3.2 3.2l5.6 5.6M8.8 3.2l-5.6 5.6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />,
-    review: (
-      <>
-        <path d="M6 2.8v3.8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-        <circle cx="6" cy="9" r="1.1" fill="currentColor" />
-      </>
-    ),
-    ready: <path d="M2.6 6.3l2.3 2.3 4.6-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />,
-    running: <path d="M6 2.5a3.5 3.5 0 103.5 3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />,
-    idle: null,
-  };
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      {paths[tone]}
-    </svg>
-  );
-}
 
 type Params = { q?: string; show?: string; sort?: string };
 
@@ -225,7 +192,9 @@ function Row({ item }: { item: ShipmentListItem }) {
   return (
     <div className={`${GRID} items-center border-t border-line px-5 py-3.5`}>
       <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="font-mono text-[13.5px] font-medium text-primary">{item.reference}</span>
+        <Link href={`/shipments/${item.id}`} className="font-mono text-[13.5px] font-medium text-primary hover:underline">
+          {item.reference}
+        </Link>
         <span className="truncate font-medium">{item.exporter ?? <span className={muted}>Exporter not read yet</span>}</span>
       </span>
       <span className="flex min-w-0 flex-col gap-0.5">
@@ -265,7 +234,7 @@ function Row({ item }: { item: ShipmentListItem }) {
         </span>
         <span className="h-1.5 flex-1 overflow-hidden rounded-[3px] bg-track">
           <span
-            className={`block h-full rounded-[3px] ${verdict ? BARS[verdict.tone] : ""}`}
+            className={`block h-full rounded-[3px] ${verdict ? TONES[verdict.tone].solid : ""}`}
             style={{ width: `${score ?? 0}%` }}
           />
         </span>

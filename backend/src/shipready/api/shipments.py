@@ -171,9 +171,9 @@ def get_shipment(
         .where(Document.shipment_id == shipment.id)
         .order_by(Document.uploaded_at, Document.filename)
     )
+    (summary,) = _list_items(session, [shipment])
     return ShipmentDetail(
-        **ShipmentOut.model_validate(shipment).model_dump(),
-        documents=[DocumentOut.model_validate(d) for d in documents],
+        **summary.model_dump(), documents=[DocumentOut.model_validate(d) for d in documents]
     )
 
 
