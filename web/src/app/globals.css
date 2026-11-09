@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+/* The design canvas's tokens (light, then dark). The page follows the system's choice unless the
+   person picked one in the sidebar, which sets data-theme on <html>. */
+:root {
+  --bg: #f4f5f7;
+  --side: #eceef1;
+  --surface: #ffffff;
+  --sunken: #f7f8fa;
+  --ink: #1a1f2b;
+  --muted: #5b6474;
+  --line: #e3e6eb;
+  --line-strong: #cdd2da;
+  --track: #e9ecf0;
+  --panel: #0b3936;
+  --primary: #0e6b66;
+  --primary-ink: #ffffff;
+  --primary-soft: #e1f0ee;
+  --fix: #b42f25;
+  --fix-soft: #fbe8e5;
+  --review: #8a5a00;
+  --review-soft: #fcefd3;
+  --ready: #26704a;
+  --ready-soft: #e2f1e7;
+  --idle: #9aa2af;
+  --ring-run: #d3ece9;
+  --nav-shadow: 0 1px 2px rgba(26, 31, 43, 0.06), 0 4px 14px rgba(26, 31, 43, 0.06);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0f1317;
+  --side: #13181d;
+  --surface: #181e24;
+  --sunken: #141a1f;
+  --ink: #e7ebef;
+  --muted: #a0aab6;
+  --line: #262e37;
+  --line-strong: #36404b;
+  --track: #262e37;
+  --panel: #0a2422;
+  --primary: #5cc7bc;
+  --primary-ink: #0b1f1d;
+  --primary-soft: #15302e;
+  --fix: #f2948a;
+  --fix-soft: #3a1c19;
+  --review: #edc05c;
+  --review-soft: #33280f;
+  --ready: #78cc9c;
+  --ready-soft: #16301f;
+  --idle: #5e6875;
+  --ring-run: #17332f;
+  --nav-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 16px rgba(0, 0, 0, 0.25);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1317;
+    --side: #13181d;
+    --surface: #181e24;
+    --sunken: #141a1f;
+    --ink: #e7ebef;
+    --muted: #a0aab6;
+    --line: #262e37;
+    --line-strong: #36404b;
+    --track: #262e37;
+    --panel: #0a2422;
+    --primary: #5cc7bc;
+    --primary-ink: #0b1f1d;
+    --primary-soft: #15302e;
+    --fix: #f2948a;
+    --fix-soft: #3a1c19;
+    --review: #edc05c;
+    --review-soft: #33280f;
+    --ready: #78cc9c;
+    --ready-soft: #16301f;
+    --idle: #5e6875;
+    --ring-run: #17332f;
+    --nav-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 16px rgba(0, 0, 0, 0.25);
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-side: var(--side);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-track: var(--track);
+  --color-panel: var(--panel);
+  --color-primary: var(--primary);
+  --color-primary-ink: var(--primary-ink);
+  --color-primary-soft: var(--primary-soft);
+  --color-fix: var(--fix);
+  --color-fix-soft: var(--fix-soft);
+  --color-review: var(--review);
+  --color-review-soft: var(--review-soft);
+  --color-ready: var(--ready);
+  --color-ready-soft: var(--ready-soft);
+  --color-idle: var(--idle);
+  --font-sans: var(--font-hanken), "Segoe UI", system-ui, sans-serif;
+  --font-display: var(--font-bricolage), var(--font-hanken), sans-serif;
+  --font-mono: var(--font-jetbrains), Consolas, monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+:where(a, button, input, select, textarea):focus-visible {
+  outline: 2px solid #2aa198;
+  outline-offset: 2px;
+}
