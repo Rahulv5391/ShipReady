@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState, useTransition } from "react";
 
-import { messageText } from "@/lib/review";
+import { ACCEPT, MAX_FILE_BYTES, accepted } from "@/lib/documents";
+import { STAGES } from "@/lib/format";
+import { messageText, reviewError } from "@/lib/review";
 import type { MessageOut } from "@/lib/types";
 
-import { checkAgain, decide, updateMessage, type Outcome } from "./actions";
+import { checkAgain, decide, removeDocument, updateMessage, type Outcome } from "./actions";
 
 const BUTTON = "rounded-[10px] px-3.5 py-2 text-[13.5px] font-semibold disabled:opacity-50";
 const PRIMARY = `${BUTTON} bg-primary text-primary-ink hover:opacity-90`;
@@ -33,19 +36,19 @@ export function ReviewActions({
   shipmentId,
   state,
   blockers,
+  activeRun,
 }: {
   shipmentId: string;
   state: ReviewState;
   blockers: number;
+  activeRun: { id: string; after: number } | null;
 }) {
   const [open, setOpen] = useState<"ready" | "needs_fix" | null>(null);
   const [reason, setReason] = useState("");
   const { pending, error, run } = useAction();
   const reasonNeeded = open === "ready" && blockers > 0;
 
-  if (state === "running") {
-    return <p className="rounded-[10px] bg-primary-soft px-3.5 py-2 text-[13.5px] font-semibold text-primary">Being checked</p>;
-  }
+  if (state === "running") return activeRun ? <RunWatcher runId={activeRun.id} after={activeRun.after} /> : null;
   if (state === "closed") {
     return (
       <div className="flex flex-col items-end gap-1.5">
@@ -194,6 +197,144 @@ export function MessageCard({ shipmentId, message, to }: { shipmentId: string; m
       )}
       {draft && (
         <p className="text-[12.5px] text-muted">ShipReady never sends messages for you. Approving records your decision; copy the text into your email.</p>
+      )}
+    </div>
+  );
+}
+
+/** Follows a running check live and shows its stage; when it waits for review or stops, the
+ * report is read again. Only events after the ones the page was drawn with count, as a run
+ * reopened by a correction already holds its earlier "awaiting review". */
+function RunWatcher({ runId, after }: { runId: string; after: number }) {
+  const router = useRouter();
+  const [label, setLabel] = useState("Starting");
+  useEffect(() => {
+    const source = new EventSource(`/api/runs/${runId}/events?after=${after}`);
+    const data = (event: Event) => JSON.parse((event as MessageEvent<string>).data) as Record<string, unknown>;
+    source.addEventListener("stage_started", (event) => {
+      const stage = data(event).stage as keyof typeof STAGES;
+      setLabel(STAGES[stage] ?? "Checking");
+    });
+    source.addEventListener("document_read", (event) => setLabel(`Read ${String(data(event).file)}`));
+    source.addEventListener("waiting", () => setLabel("Waiting for the AI service"));
+    const finished = () => {
+      source.close();
+      router.refresh();
+    };
+    for (const name of ["awaiting_review", "run_failed", "run_done"]) source.addEventListener(name, finished);
+    return () => source.close();
+  }, [runId, after, router]);
+  return (
+    <p role="status" className="flex items-center gap-2 rounded-[10px] bg-primary-soft px-3.5 py-2 text-[13.5px] font-semibold text-primary">
+      <span className="size-2 animate-pulse rounded-full bg-primary" aria-hidden="true" />
+      Being checked: {label}
+    </p>
+  );
+}
+
+/** Replace a file with a corrected one, or take it out; either checks the shipment again. */
+export function DocumentActions({
+  shipmentId,
+  documentId,
+  filename,
+  removable,
+  disabled,
+}: {
+  shipmentId: string;
+  documentId: string;
+  filename: string;
+  removable: boolean;
+  disabled: boolean;
+}) {
+  const router = useRouter();
+  const input = useRef<HTMLInputElement>(null);
+  const [removing, setRemoving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const { pending, error, run } = useAction();
+
+  const replace = async (file: File) => {
+    if (!accepted(file.name)) {
+      setNotice(`${file.name} isn't a file ShipReady reads. Use PDF, Word, Excel or an image.`);
+      return;
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      setNotice(`${file.name} is larger than 25 MB.`);
+      return;
+    }
+    setUploading(true);
+    setNotice(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const response = await fetch(`/api/documents/${documentId}:replace`, { method: "POST", body: form });
+      const body = (await response.json().catch(() => ({}))) as { detail?: unknown; duplicates?: { same_as: string }[] };
+      if (!response.ok) setNotice(reviewError(response.status, typeof body.detail === "string" ? body.detail : ""));
+      else if (body.duplicates?.length) setNotice(`That's the same file as ${body.duplicates[0].same_as}. Nothing changed.`);
+      else router.refresh();
+    } catch {
+      setNotice("ShipReady's server didn't answer. Try again.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const message = notice ?? error;
+  return (
+    <div className="flex flex-none flex-col items-end gap-1">
+      {removing ? (
+        <span className="flex items-center gap-2 text-[12.5px]">
+          Remove it?
+          <button type="button" className="font-semibold text-muted hover:underline" onClick={() => setRemoving(false)}>
+            Keep
+          </button>
+          <button
+            type="button"
+            className="font-semibold text-fix hover:underline disabled:opacity-50"
+            disabled={pending}
+            onClick={() => run(() => removeDocument(shipmentId, documentId), () => setRemoving(false))}
+          >
+            Remove
+          </button>
+        </span>
+      ) : (
+        <span className="flex gap-3 text-[12.5px] font-semibold">
+          <button
+            type="button"
+            className="text-primary hover:underline disabled:opacity-50"
+            disabled={disabled || uploading}
+            onClick={() => input.current?.click()}
+          >
+            {uploading ? "Uploading" : "Replace"}
+          </button>
+          {removable && (
+            <button
+              type="button"
+              className="text-muted hover:text-fix hover:underline disabled:opacity-50"
+              disabled={disabled}
+              onClick={() => setRemoving(true)}
+            >
+              Remove
+            </button>
+          )}
+        </span>
+      )}
+      <input
+        ref={input}
+        type="file"
+        accept={ACCEPT}
+        hidden
+        aria-label={`Corrected file for ${filename}`}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) void replace(file);
+        }}
+      />
+      {message && (
+        <p role="alert" className="max-w-[240px] text-right text-[12.5px] text-fix">
+          {message}
+        </p>
       )}
     </div>
   );

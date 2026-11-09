@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Iterator
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from kombu.exceptions import OperationalError
 from sqlalchemy import Connection, Engine, select
@@ -102,13 +102,16 @@ def run_events(
     principal: PrincipalDep,
     session: SessionDep,
     last_event_id: Annotated[int | None, Header()] = None,
+    after: Annotated[int, Query(ge=0)] = 0,
 ) -> StreamingResponse:
     """The run's events as Server-Sent Events: those so far, then each as it happens, until the
-    run is done or failed. A client that reconnects sends the last ID it saw and resumes."""
+    run is done or failed. A client that reconnects sends the last ID it saw and resumes. `after`
+    starts later the first time: a page that already shows a reopened run follows only what is
+    new, not the earlier "awaiting review" of the same run."""
     run_of(session, principal.org_id, run_id)
     engine = session.get_bind()
     return StreamingResponse(
-        _stream(engine, run_id, last_event_id or 0),
+        _stream(engine, run_id, max(last_event_id or 0, after)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )

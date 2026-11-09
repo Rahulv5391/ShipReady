@@ -34,6 +34,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   if (response.status === 401) redirect("/sign-out");
   if (!response.ok) throw new ApiError(response.status, await detail(response));
+  if (response.status === 204) return undefined as T; // no content, as a removal answers
   return (await response.json()) as T;
 }
 

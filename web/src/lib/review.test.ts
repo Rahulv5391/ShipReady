@@ -9,6 +9,12 @@ describe("reviewError", () => {
     [409, "a run of this shipment is in progress", "It's being checked already."],
     [409, "the shipment's files are not all read", "Some files are still being read. Try again in a moment."],
     [409, "the message is already approved", "This message was approved already. Reload the page."],
+    [409, "a shipment keeps at least one file; replace it instead", "A shipment keeps at least one file. Replace it instead."],
+    [
+      409,
+      "the shipment is being read and checked; try again when it is waiting for review",
+      "The shipment is being checked. Try again when it's waiting for review.",
+    ],
     [404, "message not found", "This shipment or message no longer exists. Reload the page."],
     [503, "the work queue is unavailable", "ShipReady's work queue isn't answering. Try again in a minute."],
   ])("words a %i (%s)", (status, detail, expected) => {

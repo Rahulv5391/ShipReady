@@ -37,6 +37,11 @@ export async function checkAgain(shipmentId: string): Promise<Outcome> {
   return act(shipmentId, () => api(`/shipments/${shipmentId}/runs`, { method: "POST" }));
 }
 
+/** Takes a file out of the shipment; the rest are checked again. */
+export async function removeDocument(shipmentId: string, documentId: string): Promise<Outcome> {
+  return act(shipmentId, () => api(`/documents/${documentId}`, { method: "DELETE" }));
+}
+
 /** Saves edits to a draft when there are any, then approves or discards it if asked. */
 export async function updateMessage(
   shipmentId: string,

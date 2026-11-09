@@ -800,6 +800,13 @@ def test_run_events_stream_and_resume(client: TestClient, session: Session) -> N
 
     resumed = client.get(path, headers={**headers(), "Last-Event-ID": second}).text
     assert event_names(resumed) == ["stage_started", "run_failed"]
+    later = client.get(f"{path}?after={second}", headers=headers()).text
+    assert event_names(later) == ["stage_started", "run_failed"]
+    # A reconnect's Last-Event-ID wins when it is further on.
+    third = blocks[2][0].removeprefix("id: ")
+    both = client.get(f"{path}?after={second}", headers={**headers(), "Last-Event-ID": third})
+    assert event_names(both.text) == ["run_failed"]
+    assert client.get(f"{path}?after=-1", headers=headers()).status_code == 422
     assert client.get(path, headers=headers(OTHER_ORG_ID)).status_code == 404
 
 

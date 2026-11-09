@@ -4,8 +4,9 @@ import { apiUrl } from "@/lib/api";
 import { readSession } from "@/lib/session";
 
 /**
- * The few API requests the browser makes itself (uploads, Drive imports, live progress, page images), passed
- * on with the session's token so the token never reaches page scripts (Decision.md D-38).
+ * The few API requests the browser makes itself (uploads, Drive imports, corrected files, live
+ * progress, page images), passed on with the session's token so the token never reaches page
+ * scripts (Decision.md D-38).
  * Bodies and answers are streamed, not buffered: uploads can be large and progress never ends
  * until the run does.
  */
@@ -13,6 +14,7 @@ const ID = "[0-9a-f-]{36}";
 const ALLOWED: [string, RegExp][] = [
   ["POST", new RegExp(`^shipments/${ID}/documents$`)],
   ["POST", new RegExp(`^shipments/${ID}/documents:import-drive$`)],
+  ["POST", new RegExp(`^documents/${ID}:replace$`)],
   ["GET", new RegExp(`^shipments/${ID}/runs$`)],
   ["GET", new RegExp(`^runs/${ID}/events$`)],
   ["GET", new RegExp(`^documents/${ID}/pages/[0-9]{1,4}/image$`)],
@@ -34,7 +36,7 @@ async function relay(request: NextRequest, { params }: RouteContext<"/api/[...pa
   }
   let upstream: Response;
   try {
-    upstream = await fetch(apiUrl(`/${path}`), {
+    upstream = await fetch(apiUrl(`/${path}${request.nextUrl.search}`), {
       method: request.method,
       headers,
       body: request.method === "POST" ? request.body : undefined,

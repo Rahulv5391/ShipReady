@@ -44,7 +44,7 @@ export const READINESS: Record<Readiness, { label: string; tone: Tone }> = {
 
 export type Tone = "fix" | "review" | "ready" | "running" | "idle";
 
-const STAGES: Record<NonNullable<RunBrief["stage"]>, string> = {
+export const STAGES: Record<NonNullable<RunBrief["stage"]>, string> = {
   reading: "Reading files",
   extracting: "Reading the fields",
   checking: "Checking",

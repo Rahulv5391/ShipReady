@@ -8,6 +8,12 @@ export function reviewError(status: number, detail: string): string {
     }
     if (detail === "a run of this shipment is in progress") return "It's being checked already.";
     if (detail === "the shipment's files are not all read") return "Some files are still being read. Try again in a moment.";
+    if (detail === "a shipment keeps at least one file; replace it instead") {
+      return "A shipment keeps at least one file. Replace it instead.";
+    }
+    if (detail.startsWith("the shipment is being read and checked")) {
+      return "The shipment is being checked. Try again when it's waiting for review.";
+    }
     if (detail.startsWith("the message is already")) return `This message was ${detail.slice(23)} already. Reload the page.`;
   }
   if (status === 503) return "ShipReady's work queue isn't answering. Try again in a minute.";

@@ -29,7 +29,7 @@ import type {
   ShipmentDetail,
 } from "@/lib/types";
 
-import { MessageCard, ReviewActions, type ReviewState } from "./review";
+import { DocumentActions, MessageCard, ReviewActions, type ReviewState } from "./review";
 
 export const metadata: Metadata = { title: "Readiness report" };
 
@@ -41,6 +41,7 @@ type Data = {
   messages: MessageOut[];
   approvals: ApprovalOut[];
   events: EventOut[];
+  runId: string | null;
 };
 
 async function load(id: string): Promise<Data> {
@@ -55,7 +56,7 @@ async function load(id: string): Promise<Data> {
     const events = runs.length > 0 ? await api<EventOut[]>(`/runs/${runs[0].id}/log`) : [];
     // Messages of earlier runs were decided then; their decisions stay in the activity.
     const current = messages.filter((m) => m.run_id === runs[0]?.id);
-    return { shipment, checks, messages: current, approvals, events };
+    return { shipment, checks, messages: current, approvals, events, runId: runs[0]?.id ?? null };
   } catch (error) {
     if (error instanceof ApiError && (error.status === 404 || error.status === 422)) notFound();
     throw error;
@@ -143,7 +144,7 @@ function Finding({ check, shipmentId }: { check: CheckOut; shipmentId: string })
 
 async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise<string | undefined> }) {
   const { id } = await ids;
-  const [{ shipment, checks, messages, approvals, events }, show] = await Promise.all([load(id), tab]);
+  const [{ shipment, checks, messages, approvals, events, runId }, show] = await Promise.all([load(id), tab]);
   const current: Tab = parseTab(show);
   const verdict = shipment.readiness ? READINESS[shipment.readiness] : null;
   const score = shipment.readiness_score === null ? null : Number(shipment.readiness_score);
@@ -200,7 +201,12 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
             </p>
           )}
         </div>
-        <ReviewActions shipmentId={id} state={state} blockers={blockers} />
+        <ReviewActions
+          shipmentId={id}
+          state={state}
+          blockers={blockers}
+          activeRun={runId ? { id: runId, after: Math.max(0, ...events.map((e) => e.id)) } : null}
+        />
       </div>
 
       <section aria-label="Verdict" className="flex flex-wrap items-center gap-x-8 gap-y-5 rounded-[14px] border border-line bg-surface p-6">
@@ -350,7 +356,7 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
               {shipment.documents.map((document) => (
                 <li key={document.id} className="flex items-start gap-2.5">
                   <span className="mt-0.5 w-12 flex-none rounded-md bg-sunken py-0.5 text-center text-[11.5px] font-semibold text-muted">{kindOf(document.filename)}</span>
-                  <span className="flex min-w-0 flex-col">
+                  <span className="flex min-w-0 flex-1 flex-col">
                     <span className="font-semibold">
                       {document.parts.length > 0
                         ? document.parts.map((p) => DOCUMENT_NAMES[p.doc_type] ?? p.doc_type).join(", ")
@@ -358,6 +364,13 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
                     </span>
                     <span className="truncate text-[13px] text-muted" title={document.filename}>{document.filename}</span>
                   </span>
+                  <DocumentActions
+                    shipmentId={id}
+                    documentId={document.id}
+                    filename={document.filename}
+                    removable={files > 1}
+                    disabled={state === "running"}
+                  />
                 </li>
               ))}
             </ul>
