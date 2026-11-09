@@ -36,5 +36,5 @@ export function parseFilter(value: string | undefined): Filter | null {
 }
 
 export function parseSort(value: string | undefined): Sort {
-  return value !== undefined && value in SORTS ? (value as Sort) : "recent";
+  return value !== undefined && Object.hasOwn(SORTS, value) ? (value as Sort) : "recent";
 }
