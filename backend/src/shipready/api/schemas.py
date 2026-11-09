@@ -55,6 +55,28 @@ class ShipmentOut(BaseModel):
     created_at: datetime
 
 
+class RunBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str  # running, awaiting_review, done, failed
+    stage: str | None
+    error: str | None
+
+
+class ShipmentListItem(ShipmentOut):
+    """A shipment as the queue shows it: who and where, from its extracted fields (None until
+    they are read), its latest run and when anything last happened."""
+
+    exporter: str | None
+    consignee: str | None
+    destination_country: str | None
+    port_of_loading: str | None
+    port_of_discharge: str | None
+    files: int
+    run: RunBrief | None
+    updated_at: datetime
+
+
 class BoxOut(BaseModel):
     x0: float
     y0: float

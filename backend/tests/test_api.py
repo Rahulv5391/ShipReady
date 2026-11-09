@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from shipready import passwords, users
-from shipready.api import auth, documents, login, review, uploads
+from shipready.api import auth, documents, login, review, shipments, uploads
 from shipready.api.app import create_app
 from shipready.api.deps import (
     get_drive_client,
@@ -217,6 +217,53 @@ def test_list_shows_only_the_callers_shipments(client: TestClient) -> None:
     page = client.get("/api/v1/shipments?limit=2&offset=2", headers=headers()).json()
     assert len(page) == 1
     assert client.get("/api/v1/shipments?limit=0", headers=headers()).status_code == 422
+
+
+def test_the_list_summarises_each_shipment(client: TestClient, session: Session) -> None:
+    read = new_shipment(client, "JOB-READ")
+    upload(client, read, ("invoice.pdf", PDF))
+    extracted(session, read)
+    part = session.scalars(select(DocumentPart)).one()
+    session.add_all(
+        ExtractedField(
+            shipment_id=uuid.UUID(read),
+            part_id=part.id,
+            path=path,
+            value=value,
+            quote=value,
+            page_no=1,
+            box=None,
+            model="test-model",
+        )
+        for path, value in [
+            ("commercial_invoice.exporter.name", "Kulkarni Textiles Pvt Ltd"),
+            ("shipping_bill.exporter_name", "KULKARNI TEXTILES"),  # the invoice comes first
+            ("bill_of_lading.consignee.name", "Van Dijk Retail BV"),
+            ("commercial_invoice.destination_country", "NL"),
+            ("commercial_invoice.port_of_loading.code", "INNSA1"),
+            ("bill_of_lading.port_of_discharge.code", "NLRTM"),
+        ]
+    )
+    session.commit()
+    untouched = new_shipment(client, "JOB-NEW")
+
+    listed = {s["reference"]: s for s in client.get("/api/v1/shipments", headers=headers()).json()}
+    summary = listed["JOB-READ"]
+    assert {key: summary[key] for key in shipments.SUMMARY_FIELDS} == {
+        "exporter": "Kulkarni Textiles Pvt Ltd",
+        "consignee": "Van Dijk Retail BV",
+        "destination_country": "NL",
+        "port_of_loading": "INNSA1",
+        "port_of_discharge": "NLRTM",
+    }
+    assert summary["files"] == 1
+    assert summary["run"] == {"status": "running", "stage": "reading", "error": None}
+    assert summary["updated_at"] >= summary["created_at"]
+    empty = listed["JOB-NEW"]
+    assert [empty[key] for key in shipments.SUMMARY_FIELDS] == [None] * 5
+    assert (empty["files"], empty["run"]) == (0, None)
+    assert empty["updated_at"] == empty["created_at"]
+    del untouched
 
 
 def test_another_organisations_shipment_is_not_found(client: TestClient) -> None:

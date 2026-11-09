@@ -5,7 +5,8 @@ from functools import cache
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,8 +17,10 @@ from shipready.api.schemas import (
     CitationOut,
     DocumentOut,
     FieldOut,
+    RunBrief,
     ShipmentCreate,
     ShipmentDetail,
+    ShipmentListItem,
     ShipmentOut,
 )
 from shipready.db.models import (
@@ -25,6 +28,8 @@ from shipready.db.models import (
     Document,
     DocumentPart,
     ExtractedField,
+    Run,
+    RunEvent,
     Shipment,
 )
 from shipready.knowledge.sources import Source, load_sources
@@ -33,6 +38,36 @@ from shipready.rules.catalogue import RuleSpec, load_catalogue
 router = APIRouter(prefix="/shipments", tags=["shipments"])
 # Failures first, then what could not be decided, then what passed.
 _OUTCOME_ORDER = {"fail": 0, "not_verified": 1, "pass": 2}
+# Where the queue's summary comes from: the first of these fields the shipment has.
+SUMMARY_FIELDS: dict[str, tuple[str, ...]] = {
+    "exporter": (
+        "commercial_invoice.exporter.name",
+        "shipping_bill.exporter_name",
+        "packing_list.exporter.name",
+    ),
+    "consignee": (
+        "commercial_invoice.consignee.name",
+        "shipping_bill.consignee_name",
+        "bill_of_lading.consignee.name",
+        "air_waybill.consignee.name",
+    ),
+    "destination_country": (
+        "commercial_invoice.destination_country",
+        "shipping_bill.consignee_country",
+        "certificate_of_origin.destination_country",
+    ),
+    "port_of_loading": (
+        "commercial_invoice.port_of_loading.code",
+        "bill_of_lading.port_of_loading.code",
+        "air_waybill.airport_of_departure.code",
+        "shipping_bill.port_code",
+    ),
+    "port_of_discharge": (
+        "commercial_invoice.port_of_discharge.code",
+        "bill_of_lading.port_of_discharge.code",
+        "air_waybill.airport_of_destination.code",
+    ),
+}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -58,12 +93,72 @@ def list_shipments(
     q: Annotated[str | None, Query(max_length=64, description="part of the reference")] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
-) -> list[ShipmentOut]:
+) -> list[ShipmentListItem]:
     query = select(Shipment).where(Shipment.org_id == principal.org_id)
     if q:
         query = query.where(Shipment.reference.icontains(q, autoescape=True))
     query = query.order_by(Shipment.created_at.desc(), Shipment.id).limit(limit).offset(offset)
-    return [ShipmentOut.model_validate(s) for s in session.scalars(query)]
+    shipments = list(session.scalars(query))
+    return _list_items(session, shipments)
+
+
+def _list_items(session: Session, shipments: list[Shipment]) -> list[ShipmentListItem]:
+    """Each shipment with its summary, in four queries for the whole page."""
+    ids = [s.id for s in shipments]
+    paths = [path for choices in SUMMARY_FIELDS.values() for path in choices]
+    values: dict[uuid.UUID, dict[str, str]] = {}
+    for shipment_id, path, value in session.execute(
+        select(ExtractedField.shipment_id, ExtractedField.path, ExtractedField.value).where(
+            ExtractedField.shipment_id.in_(ids), ExtractedField.path.in_(paths)
+        )
+    ):
+        values.setdefault(shipment_id, {})[path] = value
+    files = {
+        shipment_id: count
+        for shipment_id, count in session.execute(
+            select(Document.shipment_id, func.count())
+            .where(Document.shipment_id.in_(ids))
+            .group_by(Document.shipment_id)
+        )
+    }
+    latest = {
+        run.shipment_id: run
+        for run in session.scalars(
+            select(Run)
+            .where(Run.shipment_id.in_(ids))
+            .order_by(Run.shipment_id, Run.started_at.desc())
+            .ext(distinct_on(Run.shipment_id))
+        )
+    }
+    last_event = {
+        shipment_id: at
+        for shipment_id, at in session.execute(
+            select(Run.shipment_id, func.max(RunEvent.at))
+            .join(RunEvent, RunEvent.run_id == Run.id)
+            .where(Run.shipment_id.in_(ids))
+            .group_by(Run.shipment_id)
+        )
+    }
+    items = []
+    for shipment in shipments:
+        found = values.get(shipment.id, {})
+        summary = {
+            name: next((found[p] for p in choices if p in found), None)
+            for name, choices in SUMMARY_FIELDS.items()
+        }
+        run = latest.get(shipment.id)
+        items.append(
+            ShipmentListItem.model_validate(
+                {
+                    **ShipmentOut.model_validate(shipment).model_dump(),
+                    **summary,
+                    "files": files.get(shipment.id, 0),
+                    "run": RunBrief.model_validate(run) if run else None,
+                    "updated_at": last_event.get(shipment.id) or shipment.created_at,
+                }
+            )
+        )
+    return items
 
 
 @router.get("/{shipment_id}")
