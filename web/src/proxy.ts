@@ -22,6 +22,7 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Every page except Next.js's own files, the icon and signing out.
-  matcher: ["/((?!_next/|icon.svg|sign-out).*)"],
+  // Every page except Next.js's own files, the icon, signing out and the API relay (which
+  // answers 401 itself rather than redirecting a script to the sign-in page).
+  matcher: ["/((?!_next/|icon.svg|sign-out|api/).*)"],
 };

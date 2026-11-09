@@ -26,3 +26,25 @@ export type ShipmentListItem = {
   run: RunBrief | null;
   updated_at: string;
 };
+
+export type DocumentOut = {
+  id: string;
+  filename: string;
+  media_type: string;
+  size_bytes: number;
+  status: "uploaded" | "processing" | "processed" | "failed";
+  error: string | null;
+  page_count: number | null;
+};
+
+export type UploadOut = {
+  documents: DocumentOut[];
+  duplicates: { filename: string; same_as: string }[];
+};
+
+export type RunOut = {
+  id: string;
+  status: RunBrief["status"];
+  stage: RunBrief["stage"];
+  error: string | null;
+};
