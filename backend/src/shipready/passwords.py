@@ -14,7 +14,8 @@ import secrets
 # 1.7 s on a development laptop).
 COST, BLOCK_SIZE, PARALLELISM = 2**15, 8, 3
 SALT_BYTES, KEY_BYTES = 16, 32
-MIN_PASSWORD_CHARS = 12
+# Kept short at the user's request for demo logins (Decision.md D-39); revisit before a public URL.
+MIN_PASSWORD_CHARS = 4
 SCHEME = "scrypt"
 
 

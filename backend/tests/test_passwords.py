@@ -15,8 +15,9 @@ def test_passwords_are_salted_and_checked() -> None:
 
 
 def test_short_passwords_are_refused() -> None:
-    with pytest.raises(ValueError, match="at least 12 characters"):
-        passwords.hash_password("short")
+    with pytest.raises(ValueError, match="at least 4 characters"):
+        passwords.hash_password("abc")
+    assert passwords.check_password("abcd", passwords.hash_password("abcd"))
 
 
 @pytest.mark.parametrize("stored", ["", "bcrypt$1$2$3$a$b", "scrypt$x$8$1$AAAA$AAAA", "a$b"])

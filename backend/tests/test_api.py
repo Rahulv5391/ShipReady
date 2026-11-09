@@ -953,7 +953,7 @@ def test_users_are_stored_lowercase_with_a_hash(account: User, session: Session)
         ("not-an-email", "Rahul", DEMO_ORG_ID, LOGIN_PASSWORD, "is not an email address"),
         ("a@b", "Rahul", DEMO_ORG_ID, LOGIN_PASSWORD, "is not an email address"),
         ("new@demoexports.in", " ", DEMO_ORG_ID, LOGIN_PASSWORD, "needs a name"),
-        ("new@demoexports.in", "New", DEMO_ORG_ID, "short", "at least 12"),
+        ("new@demoexports.in", "New", DEMO_ORG_ID, "abc", "at least 4"),
     ],
 )
 def test_bad_users_are_refused(
