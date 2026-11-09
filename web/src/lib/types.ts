@@ -96,3 +96,11 @@ export type ApprovalOut = {
 };
 
 export type EventOut = { id: number; type: string; data: Record<string, unknown>; at: string };
+
+export type PageOut = {
+  page_no: number;
+  width_px: number | null;
+  height_px: number | null;
+  text_source: "pdf_text" | "ocr" | "cells";
+  has_image: boolean;
+};

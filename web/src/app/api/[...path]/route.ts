@@ -4,7 +4,7 @@ import { apiUrl } from "@/lib/api";
 import { readSession } from "@/lib/session";
 
 /**
- * The few API requests the browser makes itself (uploads, Drive imports, live progress), passed
+ * The few API requests the browser makes itself (uploads, Drive imports, live progress, page images), passed
  * on with the session's token so the token never reaches page scripts (Decision.md D-38).
  * Bodies and answers are streamed, not buffered: uploads can be large and progress never ends
  * until the run does.
@@ -15,6 +15,7 @@ const ALLOWED: [string, RegExp][] = [
   ["POST", new RegExp(`^shipments/${ID}/documents:import-drive$`)],
   ["GET", new RegExp(`^shipments/${ID}/runs$`)],
   ["GET", new RegExp(`^runs/${ID}/events$`)],
+  ["GET", new RegExp(`^documents/${ID}/pages/[0-9]{1,4}/image$`)],
 ];
 const PASSED_ON = ["content-type", "accept", "last-event-id"];
 

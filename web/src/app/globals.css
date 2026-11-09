@@ -24,6 +24,7 @@
   --ready-soft: #e2f1e7;
   --idle: #9aa2af;
   --ring-run: #d3ece9;
+  --viewer: #e6e9ed;
   --nav-shadow: 0 1px 2px rgba(26, 31, 43, 0.06), 0 4px 14px rgba(26, 31, 43, 0.06);
   color-scheme: light;
 }
@@ -50,6 +51,7 @@
   --ready-soft: #16301f;
   --idle: #5e6875;
   --ring-run: #17332f;
+  --viewer: #0b0f12;
   --nav-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 16px rgba(0, 0, 0, 0.25);
   color-scheme: dark;
 }
@@ -77,6 +79,7 @@
     --ready-soft: #16301f;
     --idle: #5e6875;
     --ring-run: #17332f;
+    --viewer: #0b0f12;
     --nav-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 16px rgba(0, 0, 0, 0.25);
     color-scheme: dark;
   }
@@ -103,6 +106,7 @@
   --color-ready: var(--ready);
   --color-ready-soft: var(--ready-soft);
   --color-idle: var(--idle);
+  --color-viewer: var(--viewer);
   --font-sans: var(--font-hanken), "Segoe UI", system-ui, sans-serif;
   --font-display: var(--font-bricolage), var(--font-hanken), sans-serif;
   --font-mono: var(--font-jetbrains), Consolas, monospace;

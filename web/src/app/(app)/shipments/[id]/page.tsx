@@ -77,7 +77,7 @@ function SeverityIcon({ severity }: { severity: CheckOut["severity"] }) {
   );
 }
 
-function Finding({ check }: { check: CheckOut }) {
+function Finding({ check, shipmentId }: { check: CheckOut; shipmentId: string }) {
   const serious = check.severity === "blocker" ? "text-fix" : check.severity === "major" ? "text-review" : "text-muted";
   return (
     <article className="flex gap-3.5 border-t border-line px-5 py-4 first:border-t-0">
@@ -110,6 +110,12 @@ function Finding({ check }: { check: CheckOut }) {
                 <span className="font-mono text-muted">{field.value}</span>
               </span>
             ))}
+            <Link
+              href={`/shipments/${shipmentId}/checks/${encodeURIComponent(check.rule_id)}`}
+              className="px-1 py-1 text-[12.5px] font-semibold text-primary hover:underline"
+            >
+              Show on the page
+            </Link>
           </div>
         )}
         {check.critic_reason && (
@@ -267,7 +273,7 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
               ))}
             </ul>
           ) : (
-            shown.map((check) => <Finding key={check.rule_id} check={check} />)
+            shown.map((check) => <Finding key={check.rule_id} check={check} shipmentId={id} />)
           )}
         </section>
 

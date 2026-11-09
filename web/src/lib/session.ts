@@ -1,6 +1,7 @@
 import "server-only";
 
 import { cookies } from "next/headers";
+import { connection } from "next/server";
 
 import { tokenExpired } from "@/lib/token";
 
@@ -32,6 +33,9 @@ export async function readSession(): Promise<Session | null> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   const user = store.get(USER_COOKIE)?.value;
+  // The expiry check reads the clock, which Next.js allows only once the render is tied to a
+  // request; without this it reports the page as reading a changing value while prerendering.
+  await connection();
   if (!token || !user || tokenExpired(token)) return null;
   try {
     return { token, user: JSON.parse(user) as SessionUser };
