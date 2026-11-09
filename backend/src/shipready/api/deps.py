@@ -36,10 +36,18 @@ def get_enqueue() -> Callable[[uuid.UUID], None]:
 
 
 def get_recheck() -> Callable[[uuid.UUID], None]:
-    """Queue a shipment's extraction and checks again, its files already read."""
+    """Queue a shipment's extraction of every document, and its checks, again: its files are
+    read already (a re-check after a rule or model changed)."""
     from shipready.worker import extract_shipment
 
-    return lambda shipment_id: extract_shipment.delay(str(shipment_id))
+    return lambda shipment_id: extract_shipment.delay(str(shipment_id), True)
+
+
+def get_check() -> Callable[[uuid.UUID], None]:
+    """Queue a shipment's checks alone: its fields are current (a document was removed)."""
+    from shipready.worker import check_shipment
+
+    return lambda shipment_id: check_shipment.delay(str(shipment_id))
 
 
 def get_drive_client() -> Iterator[httpx.Client]:
@@ -50,6 +58,7 @@ def get_drive_client() -> Iterator[httpx.Client]:
 SessionDep = Annotated[Session, Depends(get_session)]
 EnqueueDep = Annotated[Callable[[uuid.UUID], None], Depends(get_enqueue)]
 RecheckDep = Annotated[Callable[[uuid.UUID], None], Depends(get_recheck)]
+CheckDep = Annotated[Callable[[uuid.UUID], None], Depends(get_check)]
 StorageDep = Annotated[Storage, Depends(get_storage)]
 PrincipalDep = Annotated[Principal, Depends(current_principal)]
 DriveClientDep = Annotated[httpx.Client, Depends(get_drive_client)]

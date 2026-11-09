@@ -108,9 +108,9 @@ def process_document(self: Any, document_id: str) -> None:
 
 
 @app.task(name="shipready.worker.extract_shipment", bind=True, max_retries=8)  # type: ignore[untyped-decorator]
-def extract_shipment(self: Any, shipment_id: str) -> None:
+def extract_shipment(self: Any, shipment_id: str, everything: bool = False) -> None:
     try:
-        extract(_engine(), _extractor(), uuid.UUID(shipment_id))
+        extract(_engine(), _extractor(), uuid.UUID(shipment_id), everything)
     except RateLimited as error:
         raise self.retry(countdown=error.retry_after) from error
     check_shipment.delay(shipment_id)
@@ -191,9 +191,13 @@ def _all_read(session: Session, shipment_id: uuid.UUID) -> bool:
     return all(status == "processed" for status in statuses)
 
 
-def extract(engine: Engine, extractor: FieldExtractor, shipment_id: uuid.UUID) -> None:
-    """Read every field of the shipment's documents in one request and store each with its
-    evidence, replacing the fields of an earlier run."""
+def extract(
+    engine: Engine, extractor: FieldExtractor, shipment_id: uuid.UUID, everything: bool = False
+) -> None:
+    """Read the fields of the shipment's documents that have none yet, in one request, and store
+    each with its evidence. Documents read before keep their fields, so a corrected or added file
+    costs one request about that file only; a file read again lost its fields with its old parts.
+    With `everything` (a re-check after a rule or model changed) every document is read again."""
     with Session(engine) as session:
         shipment = session.get(Shipment, shipment_id)
         if shipment is None:
@@ -201,8 +205,20 @@ def extract(engine: Engine, extractor: FieldExtractor, shipment_id: uuid.UUID) -
             return
         try:
             documents, parts = _documents_of(session, shipment_id)
-            fields = extract_fields(documents, extractor)
-            session.execute(delete(ExtractedField).where(ExtractedField.shipment_id == shipment_id))
+            if everything:
+                session.execute(
+                    delete(ExtractedField).where(ExtractedField.shipment_id == shipment_id)
+                )
+            else:
+                done = set(
+                    session.scalars(
+                        select(ExtractedField.part_id).where(
+                            ExtractedField.shipment_id == shipment_id
+                        )
+                    )
+                )
+                documents = [d for d in documents if parts[d.part].id not in done]
+            fields = extract_fields(documents, extractor) if documents else []
             session.add_all(
                 ExtractedField(
                     shipment_id=shipment_id,
@@ -218,7 +234,7 @@ def extract(engine: Engine, extractor: FieldExtractor, shipment_id: uuid.UUID) -
             )
             shipment.status, shipment.error = "EXTRACTED", None
             run = current_run(session, shipment)
-            record(session, run, "fields_extracted", fields=len(fields))
+            record(session, run, "fields_extracted", fields=len(fields), documents=len(documents))
             enter_stage(session, run, "checking")
             session.commit()
         except RateLimited as error:

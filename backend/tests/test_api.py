@@ -23,6 +23,7 @@ from shipready import passwords, users
 from shipready.api import auth, documents, login, review, shipments, uploads
 from shipready.api.app import create_app
 from shipready.api.deps import (
+    get_check,
     get_drive_client,
     get_enqueue,
     get_recheck,
@@ -86,6 +87,12 @@ def queued() -> list[uuid.UUID]:
 
 
 @pytest.fixture
+def checked() -> list[uuid.UUID]:
+    """Shipments the API queued to be checked alone (a document was removed)."""
+    return []
+
+
+@pytest.fixture
 def rechecked() -> list[uuid.UUID]:
     """Shipments the API queued to be checked again."""
     return []
@@ -97,6 +104,7 @@ def client(
     storage: Storage,
     queued: list[uuid.UUID],
     rechecked: list[uuid.UUID],
+    checked: list[uuid.UUID],
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[TestClient]:
     monkeypatch.setenv(auth.SECRET_VARIABLE, SECRET)
@@ -112,6 +120,7 @@ def client(
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_enqueue] = lambda: queued.append
     app.dependency_overrides[get_recheck] = lambda: rechecked.append
+    app.dependency_overrides[get_check] = lambda: checked.append
     yield TestClient(app)
 
 
@@ -1272,3 +1281,129 @@ def test_a_page_image_storage_cannot_give_is_a_503(
         503,
         "file storage is unavailable; try again",
     )
+
+
+# --- corrections: remove and replace a document ---
+
+SECOND_PDF = b"%PDF-1.7\n2 0 obj << >> endobj\n%%EOF"
+
+
+def two_files_under_review(client: TestClient, session: Session) -> tuple[str, list[Any]]:
+    shipment_id = new_shipment(client)
+    documents = upload(client, shipment_id, ("invoice.pdf", PDF), ("bl.png", PNG)).json()[
+        "documents"
+    ]
+    under_review(session, shipment_id)
+    return shipment_id, documents
+
+
+def events_of(session: Session, shipment_id: str) -> list[str]:
+    run = session.scalars(select(Run).where(Run.shipment_id == uuid.UUID(shipment_id))).one()
+    return list(
+        session.scalars(
+            select(RunEvent.type).where(RunEvent.run_id == run.id).order_by(RunEvent.id)
+        )
+    )
+
+
+def test_a_removed_document_takes_its_files_and_the_rest_is_checked_again(
+    client: TestClient, session: Session, storage: Storage, checked: list[uuid.UUID]
+) -> None:
+    shipment_id, (invoice, bl) = two_files_under_review(client, session)
+    read_pages(session, storage, bl["id"])
+    assert len(stored_keys(storage)) == 3  # two files and a page image
+
+    response = client.delete(f"/api/v1/documents/{bl['id']}", headers=headers())
+    assert response.status_code == 204
+    session.expire_all()
+    assert [d.filename for d in session.scalars(select(Document))] == ["invoice.pdf"]
+    assert session.scalar(select(func.count()).select_from(DocumentPage)) == 0
+    assert len(stored_keys(storage)) == 1
+    assert checked == [uuid.UUID(shipment_id)]
+    assert events_of(session, shipment_id)[-3:] == [
+        "review_reopened",
+        "document_removed",
+        "stage_started",
+    ]
+    run = session.scalars(select(Run)).one()
+    assert (run.status, run.stage) == ("running", "checking")
+
+    last = client.delete(f"/api/v1/documents/{invoice['id']}", headers=headers())
+    assert (last.status_code, last.json()["detail"]) == (
+        409,
+        "the shipment is being read and checked; try again when it is waiting for review",
+    )
+    under_review(session, shipment_id)
+    last = client.delete(f"/api/v1/documents/{invoice['id']}", headers=headers())
+    assert (last.status_code, last.json()["detail"]) == (
+        409,
+        "a shipment keeps at least one file; replace it instead",
+    )
+    other = client.delete(f"/api/v1/documents/{invoice['id']}", headers=headers(OTHER_ORG_ID))
+    assert other.status_code == 404
+
+
+def replace(client: TestClient, document_id: str, name: str, data: bytes) -> Any:
+    return client.post(
+        f"/api/v1/documents/{document_id}:replace", files={"file": (name, data)}, headers=headers()
+    )
+
+
+def test_a_replaced_document_is_swapped_for_the_corrected_file(
+    client: TestClient, session: Session, storage: Storage, queued: list[uuid.UUID]
+) -> None:
+    shipment_id, (invoice, _) = two_files_under_review(client, session)
+    queued.clear()
+    response = replace(client, invoice["id"], "invoice-corrected.pdf", SECOND_PDF)
+    assert response.status_code == 201, response.text
+    (new,) = response.json()["documents"]
+    assert new["filename"] == "invoice-corrected.pdf"
+    session.expire_all()
+    assert sorted(d.filename for d in session.scalars(select(Document))) == [
+        "bl.png",
+        "invoice-corrected.pdf",
+    ]
+    assert len(stored_keys(storage)) == 2  # the old invoice is gone from storage too
+    assert queued == [uuid.UUID(new["id"])]  # only the new file is read
+    assert events_of(session, shipment_id)[-4:] == [
+        "review_reopened",
+        "document_removed",
+        "files_uploaded",
+        "stage_started",
+    ]
+
+
+def test_replacing_with_the_same_file_changes_nothing(
+    client: TestClient, session: Session, storage: Storage, queued: list[uuid.UUID]
+) -> None:
+    shipment_id, (invoice, _) = two_files_under_review(client, session)
+    before = events_of(session, shipment_id)
+    response = replace(client, invoice["id"], "invoice again.pdf", PDF)
+    assert response.status_code == 200
+    assert response.json() == {
+        "documents": [],
+        "duplicates": [{"filename": "invoice again.pdf", "same_as": "invoice.pdf"}],
+    }
+    session.expire_all()
+    assert len(list(session.scalars(select(Document)))) == 2
+    assert events_of(session, shipment_id) == before
+
+
+def test_replacing_waits_for_the_run_and_checks_the_file(
+    client: TestClient, session: Session, storage: Storage
+) -> None:
+    shipment_id = new_shipment(client)
+    (invoice,) = upload(client, shipment_id, ("invoice.pdf", PDF)).json()["documents"]
+    busy = replace(client, invoice["id"], "invoice-corrected.pdf", SECOND_PDF)
+    assert busy.status_code == 409  # still being read
+    under_review(session, shipment_id)
+    assert replace(client, invoice["id"], "notes.pdf", b"just text").status_code == 415
+    assert replace(client, invoice["id"], "empty.pdf", b"").status_code == 422
+    session.expire_all()
+    assert [d.filename for d in session.scalars(select(Document))] == ["invoice.pdf"]
+    other = client.post(
+        f"/api/v1/documents/{invoice['id']}:replace",
+        files={"file": ("x.pdf", SECOND_PDF)},
+        headers=headers(OTHER_ORG_ID),
+    )
+    assert other.status_code == 404

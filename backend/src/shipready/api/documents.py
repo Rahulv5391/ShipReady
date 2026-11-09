@@ -10,12 +10,13 @@ from typing import Annotated
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 from kombu.exceptions import OperationalError
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from shipready.api import drive
 from shipready.api.deps import (
+    CheckDep,
     DriveClientDep,
     EnqueueDep,
     PrincipalDep,
@@ -32,7 +33,7 @@ from shipready.api.uploads import (
     storage_key,
 )
 from shipready.db.models import Document, DocumentPage, Shipment
-from shipready.runs import current_run, enter_stage, record
+from shipready.runs import active_run, current_run, enter_stage, record
 from shipready.storage import Storage
 
 router = APIRouter(tags=["documents"])
@@ -86,6 +87,84 @@ def import_from_drive(
     return _store(received, principal.org_id, shipment, session, storage, enqueue, response)
 
 
+@router.post("/documents/{document_id}:replace", status_code=status.HTTP_201_CREATED)
+def replace_document(
+    document_id: uuid.UUID,
+    file: Annotated[UploadFile, File(description="the corrected document")],
+    principal: PrincipalDep,
+    session: SessionDep,
+    storage: StorageDep,
+    enqueue: EnqueueDep,
+    response: Response,
+) -> UploadOut:
+    """Put a corrected file in place of a document: the old one, its pages and fields go, and
+    only the new one is read and extracted before the checks run again. The same bytes as a
+    file already in the shipment (the old one included) are reported as a duplicate and nothing
+    changes. Refused while the shipment is being read or checked."""
+    document = document_of(session, principal.org_id, document_id)
+    shipment = session.get_one(Shipment, document.shipment_id)
+    _check_idle(session, shipment)
+    received = [(display_name(file.filename), file.file.read(MAX_FILE_BYTES + 1))]
+    return _store(
+        received, principal.org_id, shipment, session, storage, enqueue, response, document
+    )
+
+
+@router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_document(
+    document_id: uuid.UUID,
+    principal: PrincipalDep,
+    session: SessionDep,
+    storage: StorageDep,
+    check: CheckDep,
+) -> None:
+    """Take a document out of its shipment, with its pages and fields, and check the rest
+    again. A shipment keeps at least one file (replace it instead), and nothing is removed while
+    the shipment is being read or checked."""
+    document = document_of(session, principal.org_id, document_id)
+    shipment = session.get_one(Shipment, document.shipment_id)
+    _check_idle(session, shipment)
+    files = session.scalar(
+        select(func.count()).select_from(Document).where(Document.shipment_id == shipment.id)
+    )
+    if files == 1:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "a shipment keeps at least one file; replace it instead"
+        )
+    keys = _keys_of(session, document)
+    filename = document.filename
+    session.execute(delete(Document).where(Document.id == document.id))
+    run = current_run(session, shipment)
+    record(session, run, "document_removed", file=filename)
+    enter_stage(session, run, "checking")
+    session.commit()
+    _remove(storage, keys, "a removed document")
+    try:
+        check(shipment.id)
+    except OperationalError as error:
+        logger.error("could not queue the checks of shipment %s (%s)", shipment.id, error)
+
+
+def _check_idle(session: Session, shipment: Shipment) -> None:
+    """Files change only between runs or while one awaits review, so results never mix them."""
+    run = active_run(session, shipment.id)
+    if run is not None and run.status == "running":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "the shipment is being read and checked; try again when it is waiting for review",
+        )
+
+
+def _keys_of(session: Session, document: Document) -> list[str]:
+    """The stored file and its page images."""
+    images = session.scalars(
+        select(DocumentPage.image_key).where(
+            DocumentPage.document_id == document.id, DocumentPage.image_key.is_not(None)
+        )
+    )
+    return [document.storage_key, *(key for key in images if key)]
+
+
 def _check_count(count: int) -> None:
     if count > MAX_FILES_PER_UPLOAD:
         raise HTTPException(
@@ -101,8 +180,10 @@ def _store(
     storage: Storage,
     enqueue: Callable[[uuid.UUID], None],
     response: Response,
+    replacing: Document | None = None,
 ) -> UploadOut:
-    """Check, store and queue received files, however they arrived (`upload_documents`)."""
+    """Check, store and queue received files, however they arrived (`upload_documents`), in
+    place of `replacing` when given (`replace_document`)."""
     stored_as = {
         digest: filename
         for digest, filename in session.execute(
@@ -147,10 +228,15 @@ def _store(
         return UploadOut(documents=[], duplicates=duplicates)
 
     stored: list[str] = []
+    replaced = _keys_of(session, replacing) if replacing else []
     try:
         for document, data in documents:
             storage.put(document.storage_key, data, document.media_type)
             stored.append(document.storage_key)
+        if replacing:
+            run = current_run(session, shipment)
+            record(session, run, "document_removed", file=replacing.filename)
+            session.execute(delete(Document).where(Document.id == replacing.id))
         session.add_all(document for document, _ in documents)
         # New files make earlier fields incomplete; extraction runs again once they are read.
         shipment.status = "RECEIVED"
@@ -160,7 +246,7 @@ def _store(
         session.commit()
     except Exception as error:
         session.rollback()
-        _remove(storage, stored)
+        _remove(storage, stored, "a failed upload")
         if isinstance(error, IntegrityError):  # the same file uploaded at the same moment
             raise HTTPException(
                 status.HTTP_409_CONFLICT, "a file is already in this shipment"
@@ -171,6 +257,7 @@ def _store(
                 status.HTTP_503_SERVICE_UNAVAILABLE, "file storage is unavailable; try again"
             ) from None
         raise
+    _remove(storage, replaced, "a replaced document")
     for document, _ in documents:
         try:
             enqueue(document.id)
@@ -187,15 +274,15 @@ def _store(
     )
 
 
-def _remove(storage: Storage, keys: list[str]) -> None:
-    """Delete files stored before the upload failed, so storage holds nothing the database does
-    not list. Storage may be the reason it failed, so a file that cannot be deleted is logged
-    for clean-up instead of hiding the original error."""
+def _remove(storage: Storage, keys: list[str], why: str) -> None:
+    """Delete stored files the database no longer lists (`why`: after a failed upload, or of a
+    replaced or removed document). Storage may be failing, so a file that cannot be deleted is
+    logged for clean-up instead of hiding the original error or undoing the change."""
     for key in keys:
         try:
             storage.delete(key)
         except (BotoCoreError, ClientError) as error:
-            logger.error("could not remove %s after a failed upload: %s", key, error)
+            logger.error("could not remove %s after %s: %s", key, why, error)
 
 
 @router.get("/documents/{document_id}")

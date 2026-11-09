@@ -6,7 +6,7 @@ from collections.abc import Iterator
 import boto3
 import pytest
 from moto import mock_aws
-from sqlalchemy import Engine, func, select
+from sqlalchemy import Engine, delete, func, select
 from sqlalchemy.orm import Session
 
 from shipgen.documents import build_documents
@@ -259,7 +259,7 @@ def test_extraction_stores_fields_with_evidence(
     shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
     extractor = FakeExtractor()
     worker.extract(engine_of, extractor, shipment_id)
-    worker.extract(engine_of, extractor, shipment_id)  # replaces
+    worker.extract(engine_of, extractor, shipment_id, everything=True)  # replaces them all
 
     (documents,) = {tuple(d.doc_type for d in call) for call in extractor.calls}
     assert documents[:2] == ("commercial_invoice", "packing_list")
@@ -415,10 +415,16 @@ def test_extraction_task_queues_the_checks(monkeypatch: pytest.MonkeyPatch) -> N
     calls: list[str] = []
     monkeypatch.setattr(worker, "_engine", lambda: None)
     monkeypatch.setattr(worker, "_extractor", lambda: None)
-    monkeypatch.setattr(worker, "extract", lambda *args: calls.append("extract"))
+    monkeypatch.setattr(worker, "extract", lambda *args: calls.append(f"extract {args[3]}"))
     monkeypatch.setattr(worker.check_shipment, "delay", lambda id_: calls.append(f"queue {id_}"))
     worker.extract_shipment.run(shipment_id)
-    assert calls == ["extract", f"queue {shipment_id}"]
+    worker.extract_shipment.run(shipment_id, True)
+    assert calls == [
+        "extract False",
+        f"queue {shipment_id}",
+        "extract True",
+        f"queue {shipment_id}",
+    ]
 
 
 def test_a_rate_limited_judge_retries_the_checks_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -613,3 +619,41 @@ def test_worker_refuses_to_start_with_two_keys_and_no_provider(
     monkeypatch.delenv("AI_PROVIDER", raising=False)
     with pytest.raises(SystemExit, match="set AI_PROVIDER"):
         worker._check_settings()
+
+
+def test_only_documents_without_fields_are_extracted_again(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
+    extractor = FakeExtractor()  # finds fields on the first document (the invoice) only
+    worker.extract(engine_of, extractor, shipment_id)
+    first = [d.doc_type for d in extractor.calls[0]]
+    assert first[0] == "commercial_invoice"
+    kept = {f.id for f in session.scalars(select(ExtractedField))}
+
+    worker.extract(engine_of, extractor, shipment_id)
+    # The invoice has its fields: only the documents still without any are asked about again.
+    assert [d.doc_type for d in extractor.calls[1]] == first[1:]
+    session.expire_all()
+    assert {f.id for f in session.scalars(select(ExtractedField))} == kept
+
+
+def test_nothing_new_to_read_asks_the_ai_nothing(
+    session: Session, engine_of: Engine, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shipment_id = processed_shipment(session, engine_of, storage, monkeypatch)
+    # Only the invoice is left, so once its fields are read nothing is without fields.
+    session.execute(delete(DocumentPart).where(DocumentPart.doc_type != "commercial_invoice"))
+    session.commit()
+    extractor = FakeExtractor()
+    worker.extract(engine_of, extractor, shipment_id)
+    worker.extract(engine_of, extractor, shipment_id)
+    assert len(extractor.calls) == 1
+    session.expire_all()
+    shipment = session.get_one(Shipment, shipment_id)
+    assert shipment.status == "EXTRACTED"
+    run = session.scalars(select(Run).where(Run.shipment_id == shipment_id)).one()
+    extracted = session.scalars(
+        select(RunEvent.data).where(RunEvent.run_id == run.id, RunEvent.type == "fields_extracted")
+    ).all()
+    assert [e["documents"] for e in extracted] == [1, 0]
