@@ -32,6 +32,7 @@ from shipready.api.deps import (
 from shipready.db.models import (
     CheckResult,
     Document,
+    DocumentPage,
     DocumentPart,
     ExtractedField,
     Message,
@@ -1183,3 +1184,91 @@ def test_drive_imports_stay_in_the_organisation(
     drive_files["invoice-id-0001"] = ("invoice.pdf", "application/pdf", PDF)
     response = import_drive(client, new_shipment(client), "invoice-id-0001", org=OTHER_ORG_ID)
     assert response.status_code == 404
+
+
+# --- pages and their images ---
+
+
+def read_pages(session: Session, storage: Storage, document_id: str) -> None:
+    """The document read as the worker does: page 1 with an image, page 2 a sheet without."""
+    document = session.get_one(Document, uuid.UUID(document_id))
+    key = f"{document.storage_key.rsplit('/', 1)[0]}/pages/1.png"
+    storage.put(key, PNG, "image/png")
+    session.add_all(
+        [
+            DocumentPage(
+                document_id=document.id,
+                page_no=2,
+                image_key=None,
+                width_px=None,
+                height_px=None,
+                text_source="cells",
+                text="Sheet",
+                words=[],
+            ),
+            DocumentPage(
+                document_id=document.id,
+                page_no=1,
+                image_key=key,
+                width_px=1275,
+                height_px=1651,
+                text_source="pdf_text",
+                text="Invoice",
+                words=[],
+            ),
+        ]
+    )
+    session.commit()
+
+
+def test_pages_are_listed_and_their_images_served(
+    client: TestClient, session: Session, storage: Storage
+) -> None:
+    shipment_id = new_shipment(client)
+    (document,) = upload(client, shipment_id, ("invoice.pdf", PDF)).json()["documents"]
+    base = f"/api/v1/documents/{document['id']}/pages"
+    assert client.get(base, headers=headers()).json() == []  # not read yet
+    read_pages(session, storage, document["id"])
+
+    pages = client.get(base, headers=headers()).json()
+    assert pages == [
+        {
+            "page_no": 1,
+            "width_px": 1275,
+            "height_px": 1651,
+            "text_source": "pdf_text",
+            "has_image": True,
+        },
+        {
+            "page_no": 2,
+            "width_px": None,
+            "height_px": None,
+            "text_source": "cells",
+            "has_image": False,
+        },
+    ]
+    image = client.get(f"{base}/1/image", headers=headers())
+    assert (image.status_code, image.content) == (200, PNG)
+    assert image.headers["content-type"] == "image/png"
+    assert image.headers["cache-control"] == "private, max-age=3600"
+    assert client.get(f"{base}/2/image", headers=headers()).status_code == 404  # a sheet
+    assert client.get(f"{base}/3/image", headers=headers()).status_code == 404
+    assert client.get(f"{base}/1/image", headers=headers(OTHER_ORG_ID)).status_code == 404
+    assert client.get(base, headers=headers(OTHER_ORG_ID)).status_code == 404
+
+
+def test_a_page_image_storage_cannot_give_is_a_503(
+    client: TestClient, session: Session, storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (document,) = upload(client, new_shipment(client), ("invoice.pdf", PDF)).json()["documents"]
+    read_pages(session, storage, document["id"])
+
+    def unreachable(key: str) -> bytes:
+        raise EndpointConnectionError(endpoint_url="http://storage:8333")
+
+    monkeypatch.setattr(storage, "get", unreachable)
+    response = client.get(f"/api/v1/documents/{document['id']}/pages/1/image", headers=headers())
+    assert (response.status_code, response.json()["detail"]) == (
+        503,
+        "file storage is unavailable; try again",
+    )

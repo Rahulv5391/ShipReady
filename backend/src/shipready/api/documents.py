@@ -22,7 +22,7 @@ from shipready.api.deps import (
     SessionDep,
     StorageDep,
 )
-from shipready.api.schemas import DocumentOut, DriveImportIn, DuplicateOut, UploadOut
+from shipready.api.schemas import DocumentOut, DriveImportIn, DuplicateOut, PageOut, UploadOut
 from shipready.api.shipments import shipment_of
 from shipready.api.uploads import (
     MAX_FILE_BYTES,
@@ -31,7 +31,7 @@ from shipready.api.uploads import (
     media_type,
     storage_key,
 )
-from shipready.db.models import Document, Shipment
+from shipready.db.models import Document, DocumentPage, Shipment
 from shipready.runs import current_run, enter_stage, record
 from shipready.storage import Storage
 
@@ -202,7 +202,64 @@ def _remove(storage: Storage, keys: list[str]) -> None:
 def get_document(
     document_id: uuid.UUID, principal: PrincipalDep, session: SessionDep
 ) -> DocumentOut:
+    return DocumentOut.model_validate(document_of(session, principal.org_id, document_id))
+
+
+@router.get("/documents/{document_id}/pages")
+def list_pages(
+    document_id: uuid.UUID, principal: PrincipalDep, session: SessionDep
+) -> list[PageOut]:
+    """The file's pages as read, in order; empty until the worker has read it."""
+    document = document_of(session, principal.org_id, document_id)
+    pages = session.scalars(
+        select(DocumentPage)
+        .where(DocumentPage.document_id == document.id)
+        .order_by(DocumentPage.page_no)
+    )
+    return [
+        PageOut(
+            page_no=page.page_no,
+            width_px=page.width_px,
+            height_px=page.height_px,
+            text_source=page.text_source,
+            has_image=page.image_key is not None,
+        )
+        for page in pages
+    ]
+
+
+@router.get(
+    "/documents/{document_id}/pages/{page_no}/image",
+    response_class=Response,
+    responses={200: {"content": {"image/png": {}}}},
+)
+def page_image(
+    document_id: uuid.UUID,
+    page_no: int,
+    principal: PrincipalDep,
+    session: SessionDep,
+    storage: StorageDep,
+) -> Response:
+    """The page as rendered when it was read (PNG), on which evidence boxes are drawn. Kept by
+    the browser for an hour only, and for this person only: a page is read again when its file
+    is replaced, and pages are private to the organisation."""
+    document = document_of(session, principal.org_id, document_id)
+    page = session.get(DocumentPage, (document.id, page_no))
+    if page is None or page.image_key is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "page image not found")
+    try:
+        png = storage.get(page.image_key)
+    except (BotoCoreError, ClientError) as error:
+        logger.error("could not read page image %s: %s", page.image_key, error)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "file storage is unavailable; try again"
+        ) from None
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
+
+def document_of(session: Session, org_id: uuid.UUID, document_id: uuid.UUID) -> Document:
+    """The document if it belongs to `org_id`; another organisation's is not found."""
     document = session.get(Document, document_id)
-    if document is None or document.org_id != principal.org_id:
+    if document is None or document.org_id != org_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
-    return DocumentOut.model_validate(document)
+    return document

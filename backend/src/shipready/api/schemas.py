@@ -124,6 +124,19 @@ class CheckOut(BaseModel):
     critic_reason: str
 
 
+class PageOut(BaseModel):
+    """A page of a file as read: its size in pixels when it has an image (a workbook sheet has
+    none), and where its text came from."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    page_no: int
+    width_px: int | None
+    height_px: int | None
+    text_source: str  # pdf_text, ocr or cells
+    has_image: bool
+
+
 class DocumentPartOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
