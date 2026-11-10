@@ -193,6 +193,7 @@ class UploadOut(BaseModel):
 class DriveFileIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Drive file IDs are letters, digits, - and _; anything else never reaches Google's URL.
     id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{10,200}$")]
 
 

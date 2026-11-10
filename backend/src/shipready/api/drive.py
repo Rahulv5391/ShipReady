@@ -6,15 +6,11 @@ is used once and is never stored, queued or logged. Google Docs and Sheets are e
 Excel; other Google formats (Slides, Forms and so on) are refused by name.
 """
 
-import re
-
 import httpx
 
 from shipready.api.uploads import MAX_FILE_BYTES, XLSX
 
 DRIVE_FILES = "https://www.googleapis.com/drive/v3/files"
-# Drive file IDs are letters, digits, - and _; anything else never reaches Google's URL.
-FILE_ID = re.compile(r"[A-Za-z0-9_-]{10,200}")
 _GOOGLE_FORMAT = "application/vnd.google-apps."
 EXPORTS = {
     f"{_GOOGLE_FORMAT}document": ("application/pdf", ".pdf"),
