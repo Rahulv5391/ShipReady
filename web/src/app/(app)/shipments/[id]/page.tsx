@@ -3,7 +3,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Fragment, Suspense } from "react";
 
-import { Avatar } from "@/components/avatar";
 import { Breadcrumb } from "@/components/breadcrumb";
 import { SeverityChip, TONES, ToneIcon } from "@/components/tone";
 import { ApiError, api } from "@/lib/api";
@@ -12,7 +11,6 @@ import { compareEvidence } from "@/lib/evidence";
 import { ruleHref } from "@/lib/rules";
 import { MODES, READINESS, timeAgo } from "@/lib/format";
 import {
-  RECIPIENTS,
   TABS,
   approvalLine,
   checkStrip,
@@ -35,7 +33,8 @@ import type {
   ShipmentDetail,
 } from "@/lib/types";
 
-import { DocumentActions, MessageCard, ReviewActions, type ReviewState } from "./review";
+import { MessageList } from "./messages";
+import { DocumentActions, ReviewActions, type ReviewState } from "./review";
 
 export const metadata: Metadata = { title: "Readiness report" };
 
@@ -362,30 +361,7 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
             {messages.length === 0 ? (
               <p className="text-[13px] text-muted">No messages drafted.</p>
             ) : (
-              <ul className="flex flex-col gap-2.5">
-                {messages.map((message) => {
-                  const to = RECIPIENTS[message.recipient] ?? message.recipient;
-                  return (
-                    <li key={message.id}>
-                      <details className="group">
-                        <summary className="disclosure -mx-2 flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-sunken">
-                          <Avatar name={to} />
-                          <span className="flex min-w-0 flex-1 flex-col">
-                            <span className="font-semibold">{to}</span>
-                            <span className="truncate text-[13px] text-muted group-open:whitespace-normal" title={message.subject}>{message.subject}</span>
-                          </span>
-                          <span className={`chip capitalize ${message.status === "approved" ? "bg-ready-soft text-ready" : message.status === "discarded" ? "bg-sunken text-muted" : "bg-review-soft text-review"}`}>
-                            {message.status}
-                          </span>
-                        </summary>
-                        <div className="pt-3">
-                          <MessageCard key={`${message.id}-${message.status}`} shipmentId={id} message={message} to={to} />
-                        </div>
-                      </details>
-                    </li>
-                  );
-                })}
-              </ul>
+              <MessageList shipmentId={id} messages={messages} />
             )}
           </section>
 

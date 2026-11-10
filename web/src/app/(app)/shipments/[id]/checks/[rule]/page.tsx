@@ -4,15 +4,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
-import { Avatar } from "@/components/avatar";
 import { Breadcrumb } from "@/components/breadcrumb";
 import { ApiError, api } from "@/lib/api";
 import { TEXT_SOURCES, compareEvidence, neighbours, parseView, printedDiffers, sheetsFor, type Sheet } from "@/lib/evidence";
 import { ruleHref } from "@/lib/rules";
-import { RECIPIENTS, SEVERITY_LABELS, fieldLabel, readableMessage } from "@/lib/report";
+import { SEVERITY_LABELS, fieldLabel, readableMessage } from "@/lib/report";
 import type { CheckOut, FieldOut, MessageOut, PageOut, RunOut, ShipmentDetail } from "@/lib/types";
 
-import { MessageCard } from "../../review";
+import { MessageList } from "../../messages";
 
 export const metadata: Metadata = { title: "Evidence" };
 
@@ -208,56 +207,57 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
         )}
       </div>
 
-      <div className="flex flex-wrap items-start gap-6">
-        <section aria-label="Pages" className="flex min-w-0 flex-[1_1_640px] flex-col gap-3 rounded-[14px] border border-line bg-viewer p-4">
-          {sheets.length > 0 && (
-            <div className="flex flex-wrap items-center gap-3">
-              {sheets.length > 1 && (
-                <div role="tablist" aria-label="Pages to show" className="seg flex-wrap bg-surface/60">
-                  {[{ n: null, label: "Side by side" }, ...sheets.map((s, i) => ({ n: i + 1, label: s.label }))].map((tab) => (
-                    <Link
-                      key={tab.label}
-                      href={href({ view: tab.n ? String(tab.n) : undefined, all })}
-                      role="tab"
-                      aria-selected={shown === tab.n}
-                      scroll={false}
-                      className="seg-item"
-                    >
-                      {tab.label}
-                    </Link>
-                  ))}
-                </div>
-              )}
-              <Link
-                href={href({ view, all: outlineAll ? undefined : "1" })}
-                role="switch"
-                aria-checked={outlineAll}
-                scroll={false}
-                className="ml-auto flex items-center gap-2 text-[13px] font-medium"
-              >
-                <span className={`flex h-5 w-9 items-center rounded-full p-0.5 transition-colors ${outlineAll ? "justify-end bg-primary" : "bg-line-strong"}`}>
-                  <span className="size-4 rounded-full bg-white" />
-                </span>
-                Outline every value read
-              </Link>
-            </div>
-          )}
-          {sheets.length === 0 ? (
-            <p className="px-2 py-16 text-center text-muted">
-              This check didn&rsquo;t read a value from the pages.
-            </p>
-          ) : (
-            <div className="flex flex-wrap gap-5">
-              {sheets
-                .filter((_, i) => shown === null || shown === i + 1)
-                .map((sheet) => (
-                  <PageView key={sheet.key} sheet={sheet} page={pages.get(sheet.key)} filename={filenames.get(sheet.documentId) ?? ""} quiet={quiet} />
+      <section aria-label="Pages" className="flex min-w-0 flex-col gap-3 rounded-[14px] border border-line bg-viewer p-4">
+        {sheets.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3">
+            {sheets.length > 1 && (
+              <div role="tablist" aria-label="Pages to show" className="seg flex-wrap bg-surface/60">
+                {[{ n: null, label: "Side by side" }, ...sheets.map((s, i) => ({ n: i + 1, label: s.label }))].map((tab) => (
+                  <Link
+                    key={tab.label}
+                    href={href({ view: tab.n ? String(tab.n) : undefined, all })}
+                    role="tab"
+                    aria-selected={shown === tab.n}
+                    scroll={false}
+                    className="seg-item"
+                  >
+                    {tab.label}
+                  </Link>
                 ))}
-            </div>
-          )}
-        </section>
+              </div>
+            )}
+            <Link
+              href={href({ view, all: outlineAll ? undefined : "1" })}
+              role="switch"
+              aria-checked={outlineAll}
+              scroll={false}
+              className="ml-auto flex items-center gap-2 text-[13px] font-medium"
+            >
+              <span className={`flex h-5 w-9 items-center rounded-full p-0.5 transition-colors ${outlineAll ? "justify-end bg-primary" : "bg-line-strong"}`}>
+                <span className="size-4 rounded-full bg-white" />
+              </span>
+              Outline every value read
+            </Link>
+          </div>
+        )}
+        {sheets.length === 0 ? (
+          <p className="px-2 py-16 text-center text-muted">
+            This check didn&rsquo;t read a value from the pages.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-5">
+            {sheets
+              .filter((_, i) => shown === null || shown === i + 1)
+              .map((sheet) => (
+                <PageView key={sheet.key} sheet={sheet} page={pages.get(sheet.key)} filename={filenames.get(sheet.documentId) ?? ""} quiet={quiet} />
+              ))}
+          </div>
+        )}
+      </section>
 
-        <section aria-label="What the check read" className="flex min-w-0 flex-[1_1_300px] flex-col gap-4 card p-5">
+      {/* Two equal columns while each has room for 340px, one above the other when not. */}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,340px),1fr))] items-start gap-6">
+        <section aria-label="What the check read" className="flex min-w-0 flex-col gap-4 card p-5">
           <h2 className="font-display text-lg font-semibold">{check.outcome === "pass" ? "What the check read" : "What doesn't match"}</h2>
           {differs.length > 0 && <ValueList check={check} indices={differs} tone="fix" />}
           {agrees.length > 0 && (
@@ -293,19 +293,15 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
           </Link>
         </section>
 
-        {messages.map((message) => {
-          const to = RECIPIENTS[message.recipient] ?? message.recipient;
-          return (
-            <section key={message.id} aria-label={`Message to ${to}`} className="flex min-w-0 flex-[1_1_300px] flex-col gap-3 card p-5">
-              <div className="flex items-center gap-2.5">
-                <Avatar name={to} />
-                <span className="flex-1 font-semibold">To {to}</span>
-                <span className="chip bg-sunken capitalize">{message.status}</span>
-              </div>
-              <MessageCard key={`${message.id}-${message.status}`} shipmentId={id} message={message} to={to} />
-            </section>
-          );
-        })}
+        {messages.length > 0 && (
+          <section aria-label="Messages about this finding" className="flex min-w-0 flex-col gap-3 card p-5">
+            <div className="flex flex-col gap-1">
+              <h2 className="font-display text-lg font-semibold">Messages about this finding</h2>
+              <p className="text-[13px] text-muted">Drafted for the party who issued each document. Open one to read, edit and approve it.</p>
+            </div>
+            <MessageList shipmentId={id} messages={messages} />
+          </section>
+        )}
       </div>
     </>
   );
