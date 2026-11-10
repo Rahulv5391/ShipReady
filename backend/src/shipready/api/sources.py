@@ -17,6 +17,7 @@ from shipready.db.models import (
     RefExchangeRate,
     RefExportPolicy,
     RefItcHs,
+    RefLoad,
     RefLocation,
     RefPort,
     RefUqc,
@@ -32,6 +33,8 @@ class Dataset:
     id: str
     title: str
     publisher: str
+    # Downloaded datasets use their download's name (shipready.reference.fetch.FILES), under
+    # which the loader records when they were fetched and loaded.
     # A page a person can open. The fetch itself calls DGFT's and ICEGATE's form endpoints
     # (shipready.reference.fetch), which show nothing useful in a browser.
     url: str | None
@@ -140,9 +143,10 @@ def _regulations() -> list[RegulationOut]:
 @router.get("")
 def list_sources(session: SessionDep) -> SourcesOut:
     """The regulatory texts in sources.yaml order, then the reference datasets with how many
-    rows are loaded now. Exchange rates also give the start of the newest rate in force, the
-    one date that says how current a dataset is."""
+    rows are loaded now and when each was fetched and loaded. Exchange rates also give the start
+    of the newest rate in force."""
     newest_rate = session.scalar(select(func.max(RefExchangeRate.valid_from)))
+    loads = {load.source: load for load in session.scalars(select(RefLoad))}
     datasets = [
         DatasetOut(
             id=dataset.id,
@@ -153,6 +157,8 @@ def list_sources(session: SessionDep) -> SourcesOut:
             note=dataset.note,
             rows=session.scalar(select(func.count()).select_from(dataset.table)) or 0,
             as_of=newest_rate if dataset.table is RefExchangeRate else None,
+            fetched_at=load.fetched_at if (load := loads.get(dataset.id)) else None,
+            loaded_at=load.loaded_at if load else None,
         )
         for dataset in DATASETS
     ]

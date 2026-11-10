@@ -10,6 +10,7 @@ changes nothing and the previous data stays.
 import argparse
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import delete, select
@@ -21,10 +22,11 @@ from shipready.db.models import (
     RefExchangeRate,
     RefExportPolicy,
     RefItcHs,
+    RefLoad,
     RefLocation,
     RefPort,
 )
-from shipready.db.rows import replace
+from shipready.db.rows import replace, upsert
 from shipready.db.session import make_engine
 from shipready.reference.currencies import parse_currencies
 from shipready.reference.exchange_rates import parse_exchange_rates
@@ -51,6 +53,7 @@ def load_itc_hs(session: Session, directory: Path, report: LoadReport) -> None:
     session.execute(delete(RefExportPolicy))
     replace(session, RefItcHs, codes)
     replace(session, RefExportPolicy, policy.rows)
+    _record(session, directory, "itc-hs", "export-policy")
     report.counts.update({"ref_itc_hs": len(codes), "ref_export_policy": len(policy.rows)})
     for name, count in sorted(policy.dropped.items()):
         report.notes.append(f"dropped {count} {name} entries for codes no longer in ITC(HS)")
@@ -59,6 +62,7 @@ def load_itc_hs(session: Session, directory: Path, report: LoadReport) -> None:
 def load_ports(session: Session, directory: Path, report: LoadReport) -> None:
     ports = parse_ports(FILES["ports"], _read(directory, "ports"))
     replace(session, RefPort, ports.rows)
+    _record(session, directory, "ports")
     report.counts["ref_ports"] = len(ports.rows)
     if ports.skipped:
         report.notes.append(f"skipped administrative entries: {', '.join(sorted(ports.skipped))}")
@@ -67,6 +71,7 @@ def load_ports(session: Session, directory: Path, report: LoadReport) -> None:
 def load_currencies(session: Session, directory: Path, report: LoadReport) -> None:
     currencies = parse_currencies(FILES["currencies"], _read(directory, "currencies"))
     replace(session, RefCurrency, currencies)
+    _record(session, directory, "currencies")
     report.counts["ref_currencies"] = len(currencies)
 
 
@@ -78,6 +83,7 @@ def load_exchange_rates(session: Session, directory: Path, report: LoadReport) -
         FILES["exchange-rates"], _read(directory, "exchange-rates"), currencies
     )
     replace(session, RefExchangeRate, rates)
+    _record(session, directory, "exchange-rates")
     report.counts["ref_exchange_rates"] = len(rates)
 
 
@@ -85,13 +91,9 @@ def load_unlocode(session: Session, directory: Path, report: LoadReport) -> None
     countries = set(session.scalars(select(RefCountry.code)))
     if not countries:
         raise RuntimeError("ref_countries is empty; run `python -m shipready.db.seed` first")
-    path = directory / FILES["unlocode"]
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"{path} not found; run `python -m shipready.reference.fetch unlocode`"
-        )
-    locations = parse_unlocode(path, countries)
+    locations = parse_unlocode(_file(directory, "unlocode"), countries)
     replace(session, RefLocation, locations.rows)
+    _record(session, directory, "unlocode")
     report.counts["ref_locations"] = len(locations.rows)
     for country, count in sorted(locations.skipped_countries.items()):
         report.notes.append(f"skipped {count} UN/LOCODE entries for {country} (not ISO 3166)")
@@ -107,13 +109,35 @@ LOADERS: dict[str, Callable[[Session, Path, LoadReport], None]] = {
 }
 
 
-def _read(directory: Path, source: str) -> bytes:
+def _file(directory: Path, source: str) -> Path:
     path = directory / FILES[source]
     if not path.is_file():
         raise FileNotFoundError(
             f"{path} not found; run `python -m shipready.reference.fetch {source}`"
         )
-    return path.read_bytes()
+    return path
+
+
+def _read(directory: Path, source: str) -> bytes:
+    return _file(directory, source).read_bytes()
+
+
+def _record(session: Session, directory: Path, *sources: str) -> None:
+    """Note when these downloads were fetched and that they are loaded now, in the loader's
+    transaction: a failed load leaves the previous record with the previous data."""
+    now = datetime.now(UTC)
+    upsert(
+        session,
+        RefLoad,
+        [
+            {
+                "source": source,
+                "fetched_at": datetime.fromtimestamp(_file(directory, source).stat().st_mtime, UTC),
+                "loaded_at": now,
+            }
+            for source in sources
+        ],
+    )
 
 
 def main(argv: list[str] | None = None) -> None:

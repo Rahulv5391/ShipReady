@@ -1,8 +1,9 @@
 import json
+import os
 import shutil
 import zipfile
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from shipready.db.models import (
     RefExchangeRate,
     RefExportPolicy,
     RefItcHs,
+    RefLoad,
     RefLocation,
     RefPort,
     RefUqc,
@@ -171,6 +173,32 @@ def test_load_fills_every_reference_table(session: Session, downloads: Path) -> 
 
 
 @pytest.mark.usefixtures("small_minimums")
+def test_load_records_when_each_download_was_fetched_and_loaded(
+    session: Session, downloads: Path
+) -> None:
+    fetched = datetime(2026, 10, 20, 6, 30, tzinfo=UTC)
+    for name in FILES.values():
+        os.utime(downloads / name, (fetched.timestamp(), fetched.timestamp()))
+    seed(session)
+    before = datetime.now(UTC)
+    load_all(session, downloads)
+    session.commit()
+
+    loads = {load.source: load for load in session.scalars(select(RefLoad))}
+    assert set(loads) == set(FILES)  # export policy is recorded with the codes it loads with
+    assert all(load.fetched_at == fetched for load in loads.values())
+    assert all(before <= load.loaded_at <= datetime.now(UTC) for load in loads.values())
+
+    later = fetched + timedelta(days=7)
+    os.utime(downloads / FILES["ports"], (later.timestamp(), later.timestamp()))
+    load_module.load_ports(session, downloads, LoadReport())
+    session.commit()
+    session.expire_all()
+    assert session.get_one(RefLoad, "ports").fetched_at == later
+    assert session.get_one(RefLoad, "currencies").fetched_at == fetched
+
+
+@pytest.mark.usefixtures("small_minimums")
 def test_reloading_replaces_the_previous_data(session: Session, downloads: Path) -> None:
     seed(session)
     load_all(session, downloads)
@@ -208,6 +236,10 @@ def test_a_bad_download_leaves_the_previous_data(
 
     assert count(session, RefItcHs) == 31
     assert count(session, RefExportPolicy) == 11
+    # The record still describes the data that stayed, not the download that failed.
+    session.expire_all()
+    assert session.get_one(RefLoad, "itc-hs").loaded_at < datetime.now(UTC)
+    assert count(session, RefLoad) == len(FILES)
 
 
 @pytest.mark.usefixtures("small_minimums")
@@ -282,6 +314,7 @@ def test_migrations_downgrade_to_an_empty_schema(
             "ref_currencies",
             "ref_exchange_rates",
             "ref_locations",
+            "ref_loads",
         } <= set(inspect(connection).get_table_names())
         run_migration(connection, "base")
         assert set(inspect(connection).get_table_names()) == {"alembic_version"}

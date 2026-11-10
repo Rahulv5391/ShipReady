@@ -136,6 +136,8 @@ export type DatasetOut = {
   note: string;
   rows: number;
   as_of: string | null;
+  fetched_at: string | null;
+  loaded_at: string | null;
 };
 
 export type SourcesOut = { regulations: RegulationOut[]; datasets: DatasetOut[] };

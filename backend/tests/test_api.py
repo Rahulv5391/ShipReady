@@ -41,6 +41,7 @@ from shipready.db.models import (
     Organization,
     RefCurrency,
     RefExchangeRate,
+    RefLoad,
     Run,
     RunEvent,
     Shipment,
@@ -48,6 +49,7 @@ from shipready.db.models import (
 )
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
 from shipready.knowledge.sources import load_sources
+from shipready.reference.fetch import FILES
 from shipready.rules.catalogue import load_catalogue
 from shipready.runs import await_review, current_run, finish, record
 from shipready.storage import Storage, settings_from_env
@@ -1491,6 +1493,7 @@ def test_sources_list_the_regulations_and_every_dataset_before_any_is_loaded(
     assert all(set(r["used_by"]) <= enabled for r in body["regulations"])
     assert [d["id"] for d in body["datasets"]] == [d.id for d in sources.DATASETS]
     assert all(d["rows"] == 0 and d["as_of"] is None for d in body["datasets"])
+    assert all(d["fetched_at"] is None and d["loaded_at"] is None for d in body["datasets"])
 
 
 def test_sources_count_the_loaded_rows_and_date_the_newest_rate(
@@ -1508,12 +1511,22 @@ def test_sources_count_the_loaded_rows_and_date_the_newest_rate(
         )
         for n, day in enumerate([date(2026, 10, 3), date(2026, 10, 17)], start=1)
     )
+    session.add(
+        RefLoad(
+            source="exchange-rates",
+            fetched_at=datetime(2026, 10, 18, 4, 0, tzinfo=UTC),
+            loaded_at=datetime(2026, 10, 18, 4, 5, tzinfo=UTC),
+        )
+    )
     session.commit()
     datasets = {
         d["id"]: d for d in client.get("/api/v1/sources", headers=headers()).json()["datasets"]
     }
     assert datasets["exchange-rates"]["rows"] == 2
     assert datasets["exchange-rates"]["as_of"] == "2026-10-17"
+    assert datasets["exchange-rates"]["fetched_at"] == "2026-10-18T04:00:00Z"
+    assert datasets["exchange-rates"]["loaded_at"] == "2026-10-18T04:05:00Z"
+    assert datasets["currencies"]["fetched_at"] is None  # loaded before load times were kept
     assert datasets["currencies"]["rows"] == 1
     assert datasets["currencies"]["as_of"] is None
     assert datasets["itc-hs"]["rows"] == 0
@@ -1522,6 +1535,8 @@ def test_sources_count_the_loaded_rows_and_date_the_newest_rate(
 def test_every_source_names_enabled_rules_only() -> None:
     # A source linked to a deferred rule would point the rulebook at an entry it does not list.
     enabled = {rule.id for rule in load_catalogue() if rule.enabled}
+    # Every download is listed under its own name, which is how its load time is found.
+    assert set(FILES) <= {dataset.id for dataset in sources.DATASETS}
     for dataset in sources.DATASETS:
         assert set(dataset.used_by) <= enabled, dataset.id
         assert dataset.url is None or dataset.url.startswith("https://"), dataset.id

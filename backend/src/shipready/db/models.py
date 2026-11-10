@@ -160,6 +160,19 @@ class RefLocation(Base):
     status: Mapped[str | None] = mapped_column(String(2))
 
 
+class RefLoad(Base):
+    """When an official download (a key of shipready.reference.fetch.FILES) was fetched and
+    loaded. Written by `shipready.db.load` in the transaction that loads the data, so it always
+    describes what the tables hold."""
+
+    __tablename__ = "ref_loads"
+
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    # The downloaded file's modified time: the fetch writes each file whole when it downloads it.
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    loaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 ORGANIZATION_TYPES = ("exporter", "cha", "forwarder", "internal")
 TRANSPORT_MODES = ("sea", "air", "road", "rail", "courier")
 # Later phases add the remaining statuses of PLAN.md Section 10.2 (checked, verified, ...).

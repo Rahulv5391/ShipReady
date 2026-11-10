@@ -136,7 +136,9 @@ class RegulationOut(BaseModel):
 class DatasetOut(BaseModel):
     """A reference dataset the checks compare documents against. `url` is a public page about
     it, null for lists kept in ShipReady's code; `rows` is how many are loaded; `as_of` is set
-    for exchange rates only, as the start of the newest rate in force."""
+    for exchange rates only, as the start of the newest rate in force. `fetched_at` and
+    `loaded_at` are null for lists kept in the code and for data loaded before they were
+    recorded."""
 
     id: str
     title: str
@@ -146,6 +148,8 @@ class DatasetOut(BaseModel):
     note: str
     rows: int
     as_of: date | None
+    fetched_at: datetime | None
+    loaded_at: datetime | None
 
 
 class SourcesOut(BaseModel):

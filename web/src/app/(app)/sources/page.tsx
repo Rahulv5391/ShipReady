@@ -4,7 +4,7 @@ import { Suspense } from "react";
 
 import { api } from "@/lib/api";
 import { ruleHref } from "@/lib/rules";
-import { dayLabel, rowsLabel, siteOf } from "@/lib/sources";
+import { dayLabel, freshnessLabel, rowsLabel, siteOf } from "@/lib/sources";
 import type { DatasetOut, RegulationOut, SourcesOut } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Sources" };
@@ -37,6 +37,7 @@ function UsedBy({ ids, none }: { ids: string[]; none: string }) {
 }
 
 function Dataset({ dataset }: { dataset: DatasetOut }) {
+  const freshness = freshnessLabel(dataset.fetched_at, dataset.loaded_at);
   return (
     <article id={dataset.id} className="grid scroll-mt-6 gap-x-6 gap-y-3 border-t border-line px-5 py-4 first:border-t-0 sm:grid-cols-[minmax(0,1fr)_auto]">
       <div className="flex min-w-0 flex-col gap-1">
@@ -46,6 +47,7 @@ function Dataset({ dataset }: { dataset: DatasetOut }) {
       <p className="flex flex-col sm:items-end sm:text-right">
         <span className={`font-semibold tabular-nums ${dataset.rows === 0 ? "text-review" : ""}`}>{rowsLabel(dataset.rows)}</span>
         {dataset.as_of && <span className="text-[13px] text-muted">Newest rate in force from {dayLabel(dataset.as_of)}</span>}
+        {freshness && <span className="text-[13px] text-muted">{freshness}</span>}
       </p>
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] sm:col-span-2">
         <span>{dataset.publisher}</span>
@@ -93,7 +95,9 @@ async function Sources() {
       <section aria-labelledby="datasets" className="flex flex-col gap-3">
         <div className="flex flex-col gap-0.5">
           <h2 id="datasets" className="font-display text-lg font-semibold">Reference data</h2>
-          <p className="text-[13px] text-muted">Downloaded from each publisher and loaded in full; the counts are what is loaded now.</p>
+          <p className="text-[13px] text-muted">
+            Downloaded from each publisher and loaded in full; the counts and dates are for what is loaded now.
+          </p>
         </div>
         <div className="card overflow-hidden">
           {datasets.map((dataset) => (
