@@ -1,7 +1,7 @@
 """Request and response bodies of the API."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
@@ -119,6 +119,38 @@ class RuleOut(BaseModel):
     severity: str
     prevents: str
     source: str
+
+
+class RegulationOut(BaseModel):
+    """A regulatory text the checks cite, as listed in sources.yaml."""
+
+    id: str
+    title: str
+    issuer: str
+    version: str
+    url: str
+    format: str
+    used_by: list[str]
+
+
+class DatasetOut(BaseModel):
+    """A reference dataset the checks compare documents against. `url` is a public page about
+    it, null for lists kept in ShipReady's code; `rows` is how many are loaded; `as_of` is set
+    for exchange rates only, as the start of the newest rate in force."""
+
+    id: str
+    title: str
+    publisher: str
+    url: str | None
+    used_by: list[str]
+    note: str
+    rows: int
+    as_of: date | None
+
+
+class SourcesOut(BaseModel):
+    regulations: list[RegulationOut]
+    datasets: list[DatasetOut]
 
 
 class CheckOut(BaseModel):

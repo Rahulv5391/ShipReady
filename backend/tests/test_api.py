@@ -5,7 +5,8 @@ import time
 import uuid
 import zipfile
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import boto3
@@ -20,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from shipready import passwords, users
-from shipready.api import auth, documents, login, review, shipments, uploads
+from shipready.api import auth, documents, login, review, shipments, sources, uploads
 from shipready.api.app import create_app
 from shipready.api.deps import (
     get_check,
@@ -38,12 +39,15 @@ from shipready.db.models import (
     ExtractedField,
     Message,
     Organization,
+    RefCurrency,
+    RefExchangeRate,
     Run,
     RunEvent,
     Shipment,
     User,
 )
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
+from shipready.knowledge.sources import load_sources
 from shipready.rules.catalogue import load_catalogue
 from shipready.runs import await_review, current_run, finish, record
 from shipready.storage import Storage, settings_from_env
@@ -1460,3 +1464,68 @@ def test_rulebook_lists_the_enabled_rules_in_catalogue_order(client: TestClient)
 
 def test_rulebook_needs_a_token(client: TestClient) -> None:
     assert client.get("/api/v1/rules").status_code == 401
+
+
+# --- sources ---
+
+
+def test_sources_list_the_regulations_and_every_dataset_before_any_is_loaded(
+    client: TestClient,
+) -> None:
+    response = client.get("/api/v1/sources", headers=headers())
+    assert response.status_code == 200
+    body = response.json()
+    assert [r["id"] for r in body["regulations"]] == [s.id for s in load_sources()]
+    first = load_sources()[0]
+    assert body["regulations"][0] == {
+        "id": first.id,
+        "title": first.title,
+        "issuer": first.issuer,
+        "version": first.version,
+        "url": first.url,
+        "format": first.format,
+        # The Foreign Trade Policy also supports POL-02 and COO-01, both deferred.
+        "used_by": ["POL-01", "DOC-01"],
+    }
+    enabled = {rule.id for rule in load_catalogue() if rule.enabled}
+    assert all(set(r["used_by"]) <= enabled for r in body["regulations"])
+    assert [d["id"] for d in body["datasets"]] == [d.id for d in sources.DATASETS]
+    assert all(d["rows"] == 0 and d["as_of"] is None for d in body["datasets"])
+
+
+def test_sources_count_the_loaded_rows_and_date_the_newest_rate(
+    client: TestClient, session: Session
+) -> None:
+    session.add(RefCurrency(code="USD", name="US Dollar", minor_units=2))
+    session.add_all(
+        RefExchangeRate(
+            currency="USD",
+            valid_from=day,
+            unit=1,
+            rate_inr=Decimal("85.1000"),
+            notification=f"{n}/2026",
+            published_on=day,
+        )
+        for n, day in enumerate([date(2026, 10, 3), date(2026, 10, 17)], start=1)
+    )
+    session.commit()
+    datasets = {
+        d["id"]: d for d in client.get("/api/v1/sources", headers=headers()).json()["datasets"]
+    }
+    assert datasets["exchange-rates"]["rows"] == 2
+    assert datasets["exchange-rates"]["as_of"] == "2026-10-17"
+    assert datasets["currencies"]["rows"] == 1
+    assert datasets["currencies"]["as_of"] is None
+    assert datasets["itc-hs"]["rows"] == 0
+
+
+def test_every_source_names_enabled_rules_only() -> None:
+    # A source linked to a deferred rule would point the rulebook at an entry it does not list.
+    enabled = {rule.id for rule in load_catalogue() if rule.enabled}
+    for dataset in sources.DATASETS:
+        assert set(dataset.used_by) <= enabled, dataset.id
+        assert dataset.url is None or dataset.url.startswith("https://"), dataset.id
+
+
+def test_sources_need_a_token(client: TestClient) -> None:
+    assert client.get("/api/v1/sources").status_code == 401

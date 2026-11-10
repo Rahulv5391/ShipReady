@@ -35,7 +35,7 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
       {/* A bar across the top on a narrow screen, so the page starts on the first screen. From the
           `side` width it is a sidebar pinned to the screen, so the theme switch and sign-out stay
           in view while the page scrolls. */}
-      <aside className="flex basis-full flex-wrap items-center gap-x-2 gap-y-2 border-b border-line bg-side px-3 py-3 side:sticky side:top-0 side:h-screen side:basis-[248px] side:flex-col side:flex-nowrap side:items-stretch side:gap-6 side:overflow-y-auto side:border-b-0 side:border-r side:px-3.5 side:py-5">
+      <aside className="flex min-w-0 basis-full flex-wrap items-center gap-x-2 gap-y-2 border-b border-line bg-side px-3 py-3 side:sticky side:top-0 side:h-screen side:basis-[248px] side:flex-col side:flex-nowrap side:items-stretch side:gap-6 side:overflow-y-auto side:border-b-0 side:border-r side:px-3.5 side:py-5">
         <Link href="/shipments" className="flex items-center gap-2.5 px-1 py-1 side:px-2">
           <span className="grid size-[34px] place-items-center rounded-[9px] bg-primary text-primary-ink shadow-[var(--shadow-raised)]">
             <LogoMark />

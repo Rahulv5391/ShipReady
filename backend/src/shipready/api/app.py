@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 
 from shipready.ai import ai_provider
-from shipready.api import documents, login, review, rules, shipments
+from shipready.api import documents, login, review, rules, shipments, sources
 from shipready.api.auth import secret
 from shipready.db.session import make_engine
 from shipready.storage import make_storage, settings_from_env
@@ -43,6 +43,7 @@ def create_app() -> FastAPI:
     api.include_router(documents.router)
     api.include_router(review.router)
     api.include_router(rules.router)
+    api.include_router(sources.router)
     app.include_router(api)
     return app
 

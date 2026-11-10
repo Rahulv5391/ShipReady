@@ -34,6 +34,16 @@ const LINKS: { href: string; label: string; icon: ReactNode }[] = [
       </svg>
     ),
   },
+  {
+    href: "/sources",
+    label: "Sources",
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <ellipse cx="10" cy="5" rx="6" ry="2.5" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M4 5v10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5M4 10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    ),
+  },
 ];
 
 /** The sidebar's links, the current page marked. */
@@ -45,7 +55,7 @@ export function NavLinks() {
 /** The same links before the current page is known. */
 export function NavList({ current }: { current?: string }) {
   return (
-    <nav aria-label="Main" className="order-last flex basis-full gap-1 overflow-x-auto side:order-none side:basis-auto side:flex-col side:overflow-visible">
+    <nav aria-label="Main" className="order-last flex basis-full gap-1 overflow-x-auto [scrollbar-width:none] side:order-none side:basis-auto side:flex-col side:overflow-visible">
       {LINKS.map((link) => {
         const active = current === link.href;
         return (

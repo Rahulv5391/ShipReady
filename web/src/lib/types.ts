@@ -116,3 +116,26 @@ export type RuleOut = {
   prevents: string;
   source: string;
 };
+
+export type RegulationOut = {
+  id: string;
+  title: string;
+  issuer: string;
+  version: string;
+  url: string;
+  format: string;
+  used_by: string[];
+};
+
+export type DatasetOut = {
+  id: string;
+  title: string;
+  publisher: string;
+  url: string | null;
+  used_by: string[];
+  note: string;
+  rows: number;
+  as_of: string | null;
+};
+
+export type SourcesOut = { regulations: RegulationOut[]; datasets: DatasetOut[] };
