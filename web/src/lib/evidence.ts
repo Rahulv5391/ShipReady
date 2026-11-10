@@ -76,3 +76,22 @@ export const TEXT_SOURCES: Record<string, string> = {
   ocr: "Scan, read with OCR",
   cells: "Spreadsheet cells",
 };
+
+/** Splits a finding's values into those that disagree and those every document shares. A value
+ * agrees when each document in the evidence holds it (on the same line, for an item field), so a
+ * finding shows what differs and folds away what matches. With one document there is nothing to
+ * compare, and when nothing stands out every value is shown. */
+export function compareEvidence(evidence: FieldOut[]): { differs: number[]; agrees: number[] } {
+  const all = evidence.map((_, index) => index);
+  const documents = new Set(evidence.map((field) => documentOf(field.path)));
+  if (documents.size < 2) return { differs: all, agrees: [] };
+  const keyOf = (field: FieldOut) => `${/\.lines\[(\d+)\]/.exec(field.path)?.[1] ?? ""}|${plain(field.value)}`;
+  const holders = new Map<string, Set<string>>();
+  for (const field of evidence) {
+    const key = keyOf(field);
+    holders.set(key, (holders.get(key) ?? new Set()).add(documentOf(field.path)));
+  }
+  const agrees = all.filter((index) => holders.get(keyOf(evidence[index]))!.size === documents.size);
+  const differs = all.filter((index) => !agrees.includes(index));
+  return differs.length === 0 ? { differs: all, agrees: [] } : { differs, agrees };
+}

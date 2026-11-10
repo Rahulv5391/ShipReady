@@ -62,6 +62,17 @@ export function fieldLabel(path: string): string {
   return line ? `${documentOf(path)}, line ${Number(line[1]) + 1}` : documentOf(path);
 }
 
+// "other" is left out: as a word it turns up in ordinary sentences.
+const DOCUMENT_KEYS = new RegExp(
+  `\\b(${Object.keys(DOCUMENT_NAMES).filter((key) => key !== "other").join("|")})\\b`,
+  "g",
+);
+
+/** A check's message with the API's document keys ("packing_list 2") in words ("Packing list 2"). */
+export function readableMessage(message: string): string {
+  return message.replace(DOCUMENT_KEYS, (key) => DOCUMENT_NAMES[key]);
+}
+
 export const RECIPIENTS: Record<string, string> = {
   exporter: "Your team",
   forwarder: "Forwarder",
@@ -126,4 +137,18 @@ export function approvalLine(approval: ApprovalOut): { what: string; detail: str
     case "discard_message":
       return { what: "Message discarded", detail: by };
   }
+}
+
+export type ActivityLine = { key: string; at: string; what: string; detail: string };
+
+/** Folds runs of the same line (the AI service answering busy again and again) into its newest
+ * one, saying how many times it happened. */
+export function collapseRepeats(lines: ActivityLine[]): ActivityLine[] {
+  const out: (ActivityLine & { times: number })[] = [];
+  for (const line of lines) {
+    const last = out.at(-1);
+    if (last && last.what === line.what && last.detail === line.detail) last.times++;
+    else out.push({ ...line, times: 1 });
+  }
+  return out.map(({ times, ...line }) => (times > 1 ? { ...line, what: `${line.what}, ${times} times` } : line));
 }

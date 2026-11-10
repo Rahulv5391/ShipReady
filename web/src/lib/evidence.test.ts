@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { neighbours, parseView, printedDiffers, sheetsFor } from "./evidence";
+import { compareEvidence, neighbours, parseView, printedDiffers, sheetsFor } from "./evidence";
 import type { CheckOut, FieldOut } from "./types";
 
 const INVOICE = "11111111-1111-4111-8111-111111111111";
@@ -88,5 +88,41 @@ describe("printedDiffers", () => {
     expect(printedDiffers("Ladies handbags, genuine leather - Tote", "Ladies  handbags, genuine leather – Tote")).toBe(false);
     expect(printedDiffers("Stewart and Sons", "STEWART AND SONS")).toBe(false);
     expect(printedDiffers("42022110", "")).toBe(false);
+  });
+});
+
+describe("compareEvidence", () => {
+  const read = (path: string, value: string): FieldOut => ({ ...field(path, INVOICE), value });
+
+  it("folds away values every document holds on the same line", () => {
+    const prices = [
+      read("commercial_invoice.lines[0].unit_price", "26.08"),
+      read("purchase_order.lines[0].unit_price", "26.08"),
+      read("commercial_invoice.lines[4].unit_price", "68.55"),
+      read("purchase_order.lines[4].unit_price", "74.30"),
+    ];
+    expect(compareEvidence(prices)).toEqual({ differs: [2, 3], agrees: [0, 1] });
+  });
+
+  it("does not match equal values on different lines", () => {
+    const prices = [read("commercial_invoice.lines[0].unit_price", "5"), read("purchase_order.lines[1].unit_price", "5")];
+    expect(compareEvidence(prices).agrees).toEqual([]);
+  });
+
+  it("keeps a value one document lacks, ignoring case", () => {
+    const containers = [
+      read("packing_list.containers[0].number", "RQAU4200410"),
+      read("packing_list.containers[1].number", "BWUU2304958"),
+      read("bill_of_lading.containers[0].number", "rqau4200410"),
+    ];
+    expect(compareEvidence(containers)).toEqual({ differs: [1], agrees: [0, 2] });
+  });
+
+  it("shows every value when there is nothing to compare or nothing stands out", () => {
+    expect(compareEvidence([read("commercial_invoice.date", "1"), read("commercial_invoice.number", "2")]))
+      .toEqual({ differs: [0, 1], agrees: [] });
+    expect(compareEvidence([read("commercial_invoice.ad_code", "1"), read("shipping_bill.ad_code", "1")]))
+      .toEqual({ differs: [0, 1], agrees: [] });
+    expect(compareEvidence([])).toEqual({ differs: [], agrees: [] });
   });
 });

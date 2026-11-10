@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Suspense } from "react";
+import { Fragment, Suspense } from "react";
 
 import { TONES, ToneIcon } from "@/components/tone";
 import { ApiError, api } from "@/lib/api";
 import { DOCUMENT_NAMES, kindOf } from "@/lib/documents";
+import { compareEvidence } from "@/lib/evidence";
+import { ruleHref } from "@/lib/rules";
 import { MODES, READINESS, timeAgo } from "@/lib/format";
 import {
   RECIPIENTS,
@@ -13,11 +15,14 @@ import {
   TABS,
   approvalLine,
   checksFor,
+  collapseRepeats,
   fieldLabel,
   eventLine,
   initials,
   parseTab,
+  readableMessage,
   verdictSentence,
+  type ActivityLine,
   type Tab,
 } from "@/lib/report";
 import type {
@@ -82,63 +87,112 @@ function SeverityIcon({ severity }: { severity: CheckOut["severity"] }) {
   );
 }
 
+function Values({ check, indices }: { check: CheckOut; indices: number[] }) {
+  return (
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-1 text-[13px]">
+      {indices.map((index) => {
+        const field = check.evidence[index];
+        return (
+          <Fragment key={`${field.document_id}-${field.path}`}>
+            <dt className="text-muted">{fieldLabel(field.path)}</dt>
+            <dd className="break-words font-mono">{field.value}</dd>
+          </Fragment>
+        );
+      })}
+    </dl>
+  );
+}
+
+const SEVERITY_TONES: Record<CheckOut["severity"], string> = {
+  blocker: "bg-fix-soft text-fix",
+  major: "bg-review-soft text-review",
+  minor: "bg-sunken text-muted",
+  info: "bg-sunken text-muted",
+};
+
 function Finding({ check, shipmentId }: { check: CheckOut; shipmentId: string }) {
   const serious = check.severity === "blocker" ? "text-fix" : check.severity === "major" ? "text-review" : "text-muted";
+  const { differs, agrees } = compareEvidence(check.evidence);
+  const citation = check.citations[0];
   return (
-    <article className="flex gap-3.5 border-t border-line px-5 py-4 first:border-t-0">
+    <article className="flex gap-3.5 border-t border-line px-5 py-5 first:border-t-0">
       <span className={`mt-0.5 flex-none ${check.outcome === "fail" ? serious : "text-review"}`}>
         <SeverityIcon severity={check.severity} />
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-          <h3 className="font-semibold">{check.title}</h3>
-          <span className={`text-[12.5px] font-semibold ${serious}`}>{SEVERITY_LABELS[check.severity]}</span>
-          <span className="font-mono text-[12px] text-muted">{check.rule_id}</span>
+      <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="font-semibold leading-snug">{check.title}</h3>
+            <span className={`flex-none rounded-md px-2 py-0.5 text-[12px] font-semibold ${SEVERITY_TONES[check.severity]}`}>
+              {SEVERITY_LABELS[check.severity]}
+            </span>
+          </div>
+          {check.message && <p className="text-[14px] text-muted">{readableMessage(check.message)}</p>}
         </div>
-        <p className="text-[14px]">{check.message}</p>
-        {check.citations.map((citation) => (
-          <figure key={citation.source_id} className="rounded-lg border-l-[3px] border-line-strong bg-sunken px-3.5 py-2.5">
-            <blockquote className="line-clamp-4 text-[13px] text-muted">{citation.text}</blockquote>
-            <figcaption className="mt-1 text-[12.5px] font-semibold">
-              <a href={citation.url} target="_blank" rel="noreferrer" className="hover:underline">
-                {citation.title}
-                {citation.page ? `, page ${citation.page}` : ""}
-              </a>
-            </figcaption>
-          </figure>
-        ))}
-        {check.evidence.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {check.evidence.map((field) => (
-              <span key={`${field.document_id}-${field.path}`} className="inline-flex items-center gap-1.5 rounded-md bg-sunken px-2 py-1 text-[12.5px]">
-                <span className="font-semibold">{fieldLabel(field.path)}</span>
-                <span className="font-mono text-muted">{field.value}</span>
-              </span>
-            ))}
-            <Link
-              href={`/shipments/${shipmentId}/checks/${encodeURIComponent(check.rule_id)}`}
-              className="px-1 py-1 text-[12.5px] font-semibold text-primary hover:underline"
-            >
-              Show on the page
-            </Link>
+        {differs.length > 0 && (
+          <div className="flex flex-col gap-2 rounded-lg bg-sunken px-3.5 py-3">
+            <Values check={check} indices={differs} />
+            {agrees.length > 0 && (
+              <details className="group">
+                <summary className="cursor-pointer list-none text-[12.5px] font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+                  <span className="group-open:hidden">Show {agrees.length} matching {agrees.length === 1 ? "value" : "values"}</span>
+                  <span className="hidden group-open:inline">Hide matching values</span>
+                </summary>
+                <div className="mt-2 border-t border-line pt-2 opacity-80">
+                  <Values check={check} indices={agrees} />
+                </div>
+              </details>
+            )}
           </div>
         )}
         {check.critic_reason && (
-          <p className="flex gap-2 text-[13px] text-muted">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" className="mt-0.5 flex-none">
-              <path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z" stroke="currentColor" strokeWidth="1.3" />
-              <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.3" />
-            </svg>
-            <span>
-              <b className="text-ink">
-                {check.verification === "misread" ? "Looks like a misreading:" : "Checked on the page image:"}
-              </b>{" "}
-              {check.critic_reason}
-            </span>
+          <p className="text-[13px] text-muted">
+            <b className="font-semibold text-ink">
+              {check.verification === "misread" ? "Looks like a misreading." : "Re-read on the page image."}
+            </b>{" "}
+            {check.critic_reason}
           </p>
         )}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px]">
+          {check.evidence.length > 0 && (
+            <Link
+              href={`/shipments/${shipmentId}/checks/${encodeURIComponent(check.rule_id)}`}
+              className="font-semibold text-primary hover:underline"
+            >
+              Show on the page
+            </Link>
+          )}
+          {citation && (
+            <a href={citation.url} target="_blank" rel="noreferrer" className="min-w-0 truncate text-muted hover:text-ink hover:underline" title={citation.text}>
+              {citation.title}
+              {citation.page ? `, page ${citation.page}` : ""}
+            </a>
+          )}
+          <Link href={ruleHref(check.rule_id)} className="ml-auto font-mono text-[11.5px] text-muted hover:text-primary hover:underline" title="What this check means">
+            {check.rule_id}
+          </Link>
+        </div>
       </div>
     </article>
+  );
+}
+
+const ACTIVITY_SHOWN = 5;
+
+function ActivityList({ lines }: { lines: ActivityLine[] }) {
+  return (
+    <ol className="flex flex-col gap-3">
+      {lines.map((line) => (
+        <li key={line.key} className="flex gap-2.5">
+          <span className="mt-[7px] size-2 flex-none rounded-full bg-line-strong" />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="font-medium">{line.what}</span>
+            {line.detail && <span className="truncate text-[13px] text-muted" title={line.detail}>{line.detail}</span>}
+          </span>
+          <span className="flex-none text-[12.5px] text-muted">{timeAgo(line.at)}</span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -158,7 +212,7 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
     shipment.port_of_loading && shipment.port_of_discharge ? `from ${shipment.port_of_loading} to ${shipment.port_of_discharge}` : null,
   ].filter(Boolean).join(" ");
   const drafts = messages.filter((m) => m.status === "draft");
-  const activity = [
+  const activity = collapseRepeats([
     ...events.flatMap((e) => {
       const line = eventLine(e);
       return line ? [{ key: `e${e.id}`, at: e.at, order: e.id, ...line }] : [];
@@ -166,7 +220,7 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
     ...approvals.map((a) => ({ key: a.id, at: a.decided_at, order: 0, ...approvalLine(a) })),
   ]
     // Newest first. Events of one transaction share a time, so their recorded order decides.
-    .sort((a, b) => b.at.localeCompare(a.at) || b.order - a.order);
+    .sort((a, b) => b.at.localeCompare(a.at) || b.order - a.order));
   const files = shipment.documents.length;
   const found = shipment.documents.reduce((sum, d) => sum + d.parts.length, 0);
   const state: ReviewState =
@@ -290,12 +344,15 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
               {checks.length === 0 ? "The checks haven't run yet." : current === "failed" ? "No check failed." : current === "confirm" ? "Nothing to confirm." : "No check passed yet."}
             </p>
           ) : current === "passed" ? (
-            <ul className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-x-4 px-5 py-3">
+            // Code first in a column of its own, so codes line up and a long title wraps beside it.
+            <ul className="grid gap-x-8 px-5 py-2 xl:grid-cols-2">
               {shown.map((check) => (
-                <li key={check.rule_id} className="flex items-center gap-2 py-1.5">
-                  <span className="text-ready"><ToneIcon tone="ready" /></span>
-                  <span className="truncate" title={check.title}>{check.title}</span>
-                  <span className="ml-auto font-mono text-[11.5px] text-muted">{check.rule_id}</span>
+                <li key={check.rule_id} className="grid grid-cols-[18px_64px_minmax(0,1fr)] items-start gap-x-2.5 border-b border-line py-2.5 last:border-b-0 xl:[&:nth-last-child(2):nth-child(odd)]:border-b-0">
+                  <span className="mt-px text-ready"><ToneIcon tone="ready" /></span>
+                  <Link href={ruleHref(check.rule_id)} className="pt-px font-mono text-[12px] text-muted hover:text-primary hover:underline" title="What this check means">
+                    {check.rule_id}
+                  </Link>
+                  <span className="text-[14px] leading-snug">{check.title}</span>
                 </li>
               ))}
             </ul>
@@ -308,7 +365,11 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
           <section aria-label="Messages to send" className="flex flex-col gap-3 rounded-[14px] border border-line bg-surface p-5">
             <div className="flex flex-col gap-1">
               <h2 className="font-display text-base font-semibold">Messages to send</h2>
-              <p className="text-[13px] text-muted">Drafted for the party who issued each document. You approve and send them.</p>
+              <p className="text-[13px] text-muted">
+                {drafts.length > 0
+                  ? `${drafts.length} ${drafts.length === 1 ? "draft waits" : "drafts wait"} for your approval. Open one to read, edit and approve it.`
+                  : "Drafted for the party who issued each document. You approve and send them."}
+              </p>
             </div>
             {messages.length === 0 ? (
               <p className="text-[13px] text-muted">No messages drafted.</p>
@@ -337,11 +398,6 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
                   );
                 })}
               </ul>
-            )}
-            {drafts.length > 0 && (
-              <p className="text-[13px] text-muted">
-                {drafts.length} {drafts.length === 1 ? "draft waits" : "drafts wait"} for your approval. Open one to read, edit and approve it.
-              </p>
             )}
           </section>
 
@@ -378,18 +434,18 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
 
           <section aria-label="Activity" className="flex flex-col gap-3 rounded-[14px] border border-line bg-surface p-5">
             <h2 className="font-display text-base font-semibold">Activity</h2>
-            <ol className="flex flex-col gap-3">
-              {activity.slice(0, 12).map((line) => (
-                <li key={line.key} className="flex gap-2.5">
-                  <span className="mt-[7px] size-2 flex-none rounded-full bg-line-strong" />
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="font-medium">{line.what}</span>
-                    {line.detail && <span className="truncate text-[13px] text-muted" title={line.detail}>{line.detail}</span>}
-                  </span>
-                  <span className="flex-none text-[12.5px] text-muted">{timeAgo(line.at)}</span>
-                </li>
-              ))}
-            </ol>
+            <ActivityList lines={activity.slice(0, ACTIVITY_SHOWN)} />
+            {activity.length > ACTIVITY_SHOWN && (
+              <details className="group">
+                <summary className="cursor-pointer list-none text-[13px] font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+                  <span className="group-open:hidden">Show {activity.length - ACTIVITY_SHOWN} earlier</span>
+                  <span className="hidden group-open:inline">Hide earlier</span>
+                </summary>
+                <div className="pt-3">
+                  <ActivityList lines={activity.slice(ACTIVITY_SHOWN)} />
+                </div>
+              </details>
+            )}
           </section>
         </div>
       </div>

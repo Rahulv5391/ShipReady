@@ -105,3 +105,14 @@ export type PageOut = {
   text_source: "pdf_text" | "ocr" | "cells";
   has_image: boolean;
 };
+
+/** A rule of the rulebook (GET /rules). */
+export type RuleOut = {
+  id: string;
+  title: string;
+  description: string;
+  check_type: string;
+  severity: Severity;
+  prevents: string;
+  source: string;
+};

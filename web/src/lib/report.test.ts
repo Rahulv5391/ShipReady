@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   approvalLine,
   checksFor,
+  collapseRepeats,
   documentOf,
   eventLine,
   fieldLabel,
   initials,
   parseTab,
+  readableMessage,
   verdictSentence,
 } from "./report";
 import type { CheckOut } from "./types";
@@ -95,5 +97,31 @@ describe("small helpers", () => {
     expect(initials("Customs broker")).toBe("CB");
     expect(fieldLabel("commercial_invoice.lines[2].hs_code")).toBe("Invoice, line 3");
     expect(fieldLabel("shipping_bill.exporter.gstin")).toBe("Shipping bill");
+  });
+});
+
+describe("readableMessage", () => {
+  it("names documents in words and leaves other text alone", () => {
+    expect(readableMessage("packing_list 2, bill_of_lading 2, shipping_bill 1")).toBe("Packing list 2, Bill of lading 2, Shipping bill 1");
+    expect(readableMessage("no other copy; commercial_invoice_x stays")).toBe("no other copy; commercial_invoice_x stays");
+  });
+});
+
+describe("collapseRepeats", () => {
+  const line = (key: string, what: string, detail = "") => ({ key, at: "2026-11-10T10:00:00Z", what, detail });
+
+  it("folds a run of the same line into its newest, with a count", () => {
+    const lines = [line("a", "Checked"), line("b", "Waiting", "busy"), line("c", "Waiting", "busy"), line("d", "Waiting", "busy"), line("e", "Read x")];
+    expect(collapseRepeats(lines).map((l) => [l.key, l.what])).toEqual([
+      ["a", "Checked"],
+      ["b", "Waiting, 3 times"],
+      ["e", "Read x"],
+    ]);
+  });
+
+  it("keeps lines apart when the same line comes back later", () => {
+    const lines = [line("a", "Waiting"), line("b", "Read x"), line("c", "Waiting")];
+    expect(collapseRepeats(lines).map((l) => l.what)).toEqual(["Waiting", "Read x", "Waiting"]);
+    expect(collapseRepeats([])).toEqual([]);
   });
 });

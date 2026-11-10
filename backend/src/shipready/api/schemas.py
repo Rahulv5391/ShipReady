@@ -108,6 +108,19 @@ class CitationOut(BaseModel):
     text: str
 
 
+class RuleOut(BaseModel):
+    """A rule of the rulebook, as in the catalogue. check_type says how it is decided: DET by
+    code, DEC and LLM by the AI's judgement, "+" when combined."""
+
+    id: str
+    title: str
+    description: str
+    check_type: str
+    severity: str
+    prevents: str
+    source: str
+
+
 class CheckOut(BaseModel):
     """A check's outcome on the shipment: pass, fail, or not verified when a value it needs is
     missing or our reference data cannot decide it."""

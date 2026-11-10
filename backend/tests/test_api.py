@@ -44,6 +44,7 @@ from shipready.db.models import (
     User,
 )
 from shipready.db.seed import DEMO_ORG, DEMO_ORG_ID
+from shipready.rules.catalogue import load_catalogue
 from shipready.runs import await_review, current_run, finish, record
 from shipready.storage import Storage, settings_from_env
 
@@ -1433,3 +1434,29 @@ def test_a_runs_events_are_listed_once(client: TestClient, session: Session) -> 
     assert [e["id"] for e in log] == sorted(e["id"] for e in log)
     other = client.get(f"/api/v1/runs/{run.id}/log", headers=headers(OTHER_ORG_ID))
     assert other.status_code == 404
+
+
+# --- rulebook ---
+
+
+def test_rulebook_lists_the_enabled_rules_in_catalogue_order(client: TestClient) -> None:
+    response = client.get("/api/v1/rules", headers=headers())
+    assert response.status_code == 200
+    rules = response.json()
+    enabled = [rule for rule in load_catalogue() if rule.enabled]
+    assert [rule["id"] for rule in rules] == [rule.id for rule in enabled]
+    assert "POL-02" not in {rule["id"] for rule in rules}  # deferred, so on no report
+    price = next(rule for rule in rules if rule["id"] == "VAL-03")
+    assert price == {
+        "id": "VAL-03",
+        "title": "Unit prices match the purchase order",
+        "description": "Invoice unit prices match the purchase order within tolerance.",
+        "check_type": "DET",
+        "severity": "minor",
+        "prevents": "Buyer dispute or letter of credit discrepancy",
+        "source": next(rule.source for rule in enabled if rule.id == "VAL-03"),
+    }
+
+
+def test_rulebook_needs_a_token(client: TestClient) -> None:
+    assert client.get("/api/v1/rules").status_code == 401

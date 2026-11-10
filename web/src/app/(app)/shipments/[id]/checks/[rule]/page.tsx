@@ -5,8 +5,9 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
 import { ApiError, api } from "@/lib/api";
-import { TEXT_SOURCES, neighbours, parseView, printedDiffers, sheetsFor, type Sheet } from "@/lib/evidence";
-import { RECIPIENTS, SEVERITY_LABELS, fieldLabel, initials } from "@/lib/report";
+import { TEXT_SOURCES, compareEvidence, neighbours, parseView, printedDiffers, sheetsFor, type Sheet } from "@/lib/evidence";
+import { ruleHref } from "@/lib/rules";
+import { RECIPIENTS, SEVERITY_LABELS, fieldLabel, initials, readableMessage } from "@/lib/report";
 import type { CheckOut, FieldOut, MessageOut, PageOut, RunOut, ShipmentDetail } from "@/lib/types";
 
 import { MessageCard } from "../../review";
@@ -43,7 +44,7 @@ async function load(id: string, rule: string) {
   }
 }
 
-function Marks({ sheet }: { sheet: Sheet }) {
+function Marks({ sheet, quiet }: { sheet: Sheet; quiet: Set<number> }) {
   return sheet.marks.map(({ n, field }) =>
     field.box ? (
       <span
@@ -53,7 +54,9 @@ function Marks({ sheet }: { sheet: Sheet }) {
         className={
           n === null
             ? "absolute rounded-[3px] border border-dashed border-primary/70"
-            : "absolute rounded-[4px] border-2 border-[#b42f25]"
+            : quiet.has(n)
+              ? "absolute rounded-[4px] border-2 border-[#8a8f9c]"
+              : "absolute rounded-[4px] border-2 border-[#b42f25]"
         }
         // A few pixels around the words, so the outline frames the text instead of crossing it.
         style={{
@@ -65,8 +68,8 @@ function Marks({ sheet }: { sheet: Sheet }) {
       >
         {n !== null && (
           <>
-            <span className="absolute inset-0 bg-[#ffe27a]/45 mix-blend-multiply" />
-            <span className="absolute -left-3 -top-3 grid size-5 place-items-center rounded-full bg-[#b42f25] text-[11px] font-bold text-white">
+            {!quiet.has(n) && <span className="absolute inset-0 bg-[#ffe27a]/45 mix-blend-multiply" />}
+            <span className={`absolute -left-3 -top-3 grid size-5 place-items-center rounded-full text-[11px] font-bold text-white ${quiet.has(n) ? "bg-[#8a8f9c]" : "bg-[#b42f25]"}`}>
               {n}
             </span>
           </>
@@ -76,7 +79,7 @@ function Marks({ sheet }: { sheet: Sheet }) {
   );
 }
 
-function PageView({ sheet, page, filename }: { sheet: Sheet; page: PageOut | undefined; filename: string }) {
+function PageView({ sheet, page, filename, quiet }: { sheet: Sheet; page: PageOut | undefined; filename: string; quiet: Set<number> }) {
   const source = page ? TEXT_SOURCES[page.text_source] : "Not read yet";
   return (
     <figure className="flex min-w-0 flex-[1_1_280px] flex-col gap-2">
@@ -96,14 +99,14 @@ function PageView({ sheet, page, filename }: { sheet: Sheet; page: PageOut | und
             unoptimized
             className="h-auto w-full rounded-md"
           />
-          <Marks sheet={sheet} />
+          <Marks sheet={sheet} quiet={quiet} />
         </div>
       ) : (
         // A spreadsheet has no picture of its page: show the cells' values instead.
         <ol className="flex flex-col gap-1.5 rounded-md bg-surface p-4">
           {sheet.marks.map(({ n, field }) => (
             <li key={`${field.path}-${n}`} className="flex items-baseline gap-2 text-[13px]">
-              <span className={`grid size-5 flex-none place-items-center rounded-full text-[11px] font-bold ${n === null ? "bg-sunken text-muted" : "bg-fix text-surface"}`}>
+              <span className={`grid size-5 flex-none place-items-center rounded-full text-[11px] font-bold ${n === null || quiet.has(n) ? "bg-sunken text-muted" : "bg-fix text-surface"}`}>
                 {n ?? "·"}
               </span>
               <span className="text-muted">{field.path.split(".").slice(1).join(".")}</span>
@@ -113,6 +116,31 @@ function PageView({ sheet, page, filename }: { sheet: Sheet; page: PageOut | und
         </ol>
       )}
     </figure>
+  );
+}
+
+function ValueList({ check, indices, tone }: { check: CheckOut; indices: number[]; tone: "fix" | "quiet" }) {
+  return (
+    <ol className="flex flex-col gap-3">
+      {indices.map((index) => {
+        const field = check.evidence[index];
+        return (
+          <li key={`${field.document_id}-${field.path}`} className="flex gap-2.5">
+            <span className={`grid size-6 flex-none place-items-center rounded-full text-[12px] font-bold ${tone === "fix" ? "bg-fix text-surface" : "bg-sunken text-muted"}`}>
+              {index + 1}
+            </span>
+            <span className="flex min-w-0 flex-col">
+              <span className="text-[13px] font-semibold">{fieldLabel(field.path)}</span>
+              <span className="break-words font-mono text-[14px]">{field.value}</span>
+              {printedDiffers(field.value, field.quote) && (
+                <span className="text-[12.5px] text-muted">Printed as “{field.quote}”</span>
+              )}
+              {!field.box && <span className="text-[12.5px] text-review">Not found on the page image</span>}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -129,6 +157,9 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
     const params = new URLSearchParams(Object.entries(next).filter((e): e is [string, string] => Boolean(e[1])));
     return params.size ? `${base}?${params}` : base;
   };
+  const { differs, agrees } = compareEvidence(check.evidence);
+  // Marks are numbered from 1 in evidence order; the matching values' marks are drawn quietly.
+  const quiet = new Set(agrees.map((index) => index + 1));
   const serious = check.outcome !== "fail" ? "text-review" : check.severity === "blocker" ? "text-fix" : "text-review";
 
   return (
@@ -143,12 +174,15 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-1.5">
           <h1 className="text-balance font-display text-[26px] font-bold leading-[1.2] tracking-[-0.02em]">{check.title}</h1>
-          {check.message && <p className="text-[15px]">{check.message}</p>}
+          {check.message && <p className="text-[15px]">{readableMessage(check.message)}</p>}
           <p className="text-muted">
             <span className={`font-semibold ${serious}`}>
               {check.outcome === "not_verified" ? "To confirm" : SEVERITY_LABELS[check.severity]}
             </span>
-            , check <span className="font-mono text-ink">{check.rule_id}</span>
+            , check{" "}
+            <Link href={ruleHref(check.rule_id)} className="font-mono text-ink hover:text-primary hover:underline" title="What this check means">
+              {check.rule_id}
+            </Link>
             {place ? `. Finding ${place.position} of ${place.total}.` : "."}
           </p>
         </div>
@@ -215,7 +249,7 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
               {sheets
                 .filter((_, i) => shown === null || shown === i + 1)
                 .map((sheet) => (
-                  <PageView key={sheet.key} sheet={sheet} page={pages.get(sheet.key)} filename={filenames.get(sheet.documentId) ?? ""} />
+                  <PageView key={sheet.key} sheet={sheet} page={pages.get(sheet.key)} filename={filenames.get(sheet.documentId) ?? ""} quiet={quiet} />
                 ))}
             </div>
           )}
@@ -223,22 +257,17 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
 
         <section aria-label="What the check read" className="flex min-w-0 flex-[1_1_300px] flex-col gap-4 rounded-[14px] border border-line bg-surface p-5">
           <h2 className="font-display text-lg font-semibold">{check.outcome === "pass" ? "What the check read" : "What doesn't match"}</h2>
-          {check.evidence.length > 0 && (
-            <ol className="flex flex-col gap-3">
-              {check.evidence.map((field, index) => (
-                <li key={`${field.document_id}-${field.path}`} className="flex gap-2.5">
-                  <span className="grid size-6 flex-none place-items-center rounded-full bg-fix text-[12px] font-bold text-surface">{index + 1}</span>
-                  <span className="flex min-w-0 flex-col">
-                    <span className="text-[13px] font-semibold">{fieldLabel(field.path)}</span>
-                    <span className="break-words font-mono text-[14px]">{field.value}</span>
-                    {printedDiffers(field.value, field.quote) && (
-                      <span className="text-[12.5px] text-muted">Printed as “{field.quote}”</span>
-                    )}
-                    {!field.box && <span className="text-[12.5px] text-review">Not found on the page image</span>}
-                  </span>
-                </li>
-              ))}
-            </ol>
+          {differs.length > 0 && <ValueList check={check} indices={differs} tone="fix" />}
+          {agrees.length > 0 && (
+            <details className="group flex flex-col">
+              <summary className="cursor-pointer list-none text-[13px] font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+                <span className="group-open:hidden">Show {agrees.length} matching {agrees.length === 1 ? "value" : "values"}</span>
+                <span className="hidden group-open:inline">Matching values</span>
+              </summary>
+              <div className="pt-3">
+                <ValueList check={check} indices={agrees} tone="quiet" />
+              </div>
+            </details>
           )}
           {check.critic_reason && (
             <p className={`rounded-lg px-3.5 py-2.5 text-[13.5px] ${check.verification === "misread" ? "bg-review-soft" : "bg-sunken"}`}>

@@ -37,7 +37,9 @@ async function SignedIn() {
 export default function AppLayout({ children }: LayoutProps<"/">) {
   return (
     <div className="flex min-h-screen flex-wrap">
-      <aside className="flex max-w-full flex-[1_1_248px] flex-col gap-6 border-r border-line bg-side px-3.5 py-5 md:max-w-[280px]">
+      {/* Pinned to the screen once it sits beside the page (from 920px: their bases add up to 888px, plus room for a scrollbar),
+          so the theme switch and sign-out stay in view while the page scrolls. */}
+      <aside className="flex max-w-full flex-[1_1_248px] flex-col gap-6 border-r border-line bg-side px-3.5 py-5 md:max-w-[280px] min-[920px]:sticky min-[920px]:top-0 min-[920px]:h-screen min-[920px]:overflow-y-auto">
         <Link href="/shipments" className="flex items-center gap-2.5 px-2 py-1">
           <span className="grid size-[34px] place-items-center rounded-[9px] bg-primary text-primary-ink">
             <LogoMark />

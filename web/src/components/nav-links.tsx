@@ -24,6 +24,16 @@ const LINKS: { href: string; label: string; icon: ReactNode }[] = [
       </svg>
     ),
   },
+  {
+    href: "/rules",
+    label: "Rulebook",
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M4 4.5A1.5 1.5 0 015.5 3H15v12H5.5A1.5 1.5 0 004 16.5z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+        <path d="M4 16.5A1.5 1.5 0 005.5 18H15v-3M7.5 7h4.5M7.5 10h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    ),
+  },
 ];
 
 /** The sidebar's links, the current page marked. */
