@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 
+import { SearchField } from "@/components/search-field";
 import { ToneIcon, TONES } from "@/components/tone";
 import { api } from "@/lib/api";
 import { MODES, READINESS, countryName, progress, timeAgo, type Tone } from "@/lib/format";
@@ -23,7 +24,7 @@ export const metadata: Metadata = { title: "Shipments" };
 // The API returns at most 200 a page; the queue shows the newest 200.
 const PAGE = 200;
 const GRID =
-  "grid grid-cols-[minmax(190px,2fr)_minmax(150px,1.4fr)_minmax(150px,1.2fr)_minmax(150px,1.3fr)_128px_116px_76px] gap-3.5";
+  "grid grid-cols-[minmax(160px,2fr)_minmax(110px,1.4fr)_minmax(130px,1.1fr)_minmax(130px,1.3fr)_116px_84px_92px] gap-3";
 
 const DOTS: Record<Tone, string> = {
   fix: "bg-fix",
@@ -66,7 +67,7 @@ async function Queue({ searchParams }: { searchParams: Promise<Params> }) {
     <>
       <div className="flex flex-wrap items-end gap-4">
         <div className="flex flex-col gap-1.5">
-          <h1 className="font-display text-[34px] font-bold leading-[1.1] tracking-[-0.025em]">Shipments</h1>
+          <h1 className="page-title">Shipments</h1>
           <p className="text-base text-muted">
             {all.length === 0
               ? "Nothing here yet."
@@ -76,25 +77,12 @@ async function Queue({ searchParams }: { searchParams: Promise<Params> }) {
           </p>
         </div>
         <form action="/shipments" className="ml-auto flex flex-wrap gap-2.5">
-          <label className="flex min-h-11 min-w-[260px] items-center gap-2 rounded-[10px] border border-line bg-surface px-3.5 text-muted">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-              <circle cx="8" cy="8" r="5" stroke="currentColor" strokeWidth="1.6" />
-              <path d="M12 12l3.5 3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-            </svg>
-            <span className="sr-only">Search shipments</span>
-            <input
-              name="q"
-              type="search"
-              defaultValue={q}
-              placeholder="Search by reference"
-              className="w-full bg-transparent text-ink outline-none"
-            />
-          </label>
+          <SearchField label="Search shipments" placeholder="Search by reference" value={q} />
           {show && <input type="hidden" name="show" value={show} />}
           {sort !== "recent" && <input type="hidden" name="sort" value={sort} />}
           <Link
             href="/shipments/new"
-            className="inline-flex min-h-11 items-center gap-2 rounded-[10px] bg-primary px-[18px] font-semibold text-primary-ink"
+            className="btn btn-md btn-primary"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -107,7 +95,7 @@ async function Queue({ searchParams }: { searchParams: Promise<Params> }) {
       <div
         role="group"
         aria-label="Filter by readiness"
-        className="grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] overflow-hidden rounded-[14px] border border-line bg-surface"
+        className="grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] overflow-hidden card"
       >
         {FILTERS.map((filter) => {
           const on = show === filter.id;
@@ -117,15 +105,16 @@ async function Queue({ searchParams }: { searchParams: Promise<Params> }) {
               key={filter.id}
               href={href({ q, show: on ? null : filter.id, sort })}
               aria-pressed={on}
-              className={`flex flex-col gap-2.5 border-r border-line px-5 py-[18px] ${on ? tone.soft : ""}`}
+              className={`relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-r border-line px-5 py-4 transition-colors last:border-r-0 ${on ? tone.soft : "hover:bg-sunken"}`}
             >
+              {on && <span className={`absolute inset-x-0 top-0 h-[3px] ${tone.solid}`} />}
               <span className={`flex items-center gap-2 font-semibold ${tone.fg}`}>
                 <span className={`grid size-[22px] place-items-center rounded-full ${tone.soft}`}>
                   <ToneIcon tone={FILTER_TONES[filter.id]} />
                 </span>
                 {filter.label}
               </span>
-              <span className="font-display text-4xl font-bold leading-none tracking-[-0.02em] tabular-nums">
+              <span className="row-span-2 font-display text-[34px] font-bold leading-none tracking-[-0.02em] tabular-nums">
                 {all.filter((item) => matches(item, filter.id)).length}
               </span>
               <span className="text-[13px] text-muted">{filter.hint}</span>
@@ -134,14 +123,14 @@ async function Queue({ searchParams }: { searchParams: Promise<Params> }) {
         })}
       </div>
 
-      <section aria-label="Shipment list" className="overflow-hidden rounded-[14px] border border-line bg-surface">
+      <section aria-label="Shipment list" className="overflow-hidden card">
         <form action="/shipments" className="flex flex-wrap items-center gap-3 border-b border-line px-5 py-4">
           <h2 className="font-display text-lg font-semibold tracking-[-0.01em]">
             {show ? FILTERS.find((f) => f.id === show)?.label : "All shipments"}
           </h2>
           <span className="text-[13px] text-muted">{rows.length} shown</span>
           {show && (
-            <Link href={href({ q, show: null, sort })} className="flex min-h-8 items-center rounded-lg border border-line px-2.5 text-[13px]">
+            <Link href={href({ q, show: null, sort })} className="flex min-h-8 items-center rounded-lg border border-line px-2.5 text-[13px] transition-colors hover:bg-sunken">
               Clear filter
             </Link>
           )}
@@ -163,8 +152,8 @@ async function Queue({ searchParams }: { searchParams: Promise<Params> }) {
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <div className="min-w-[940px]">
-              <div className={`${GRID} bg-sunken px-5 py-2.5 text-[13px] font-medium text-muted`}>
+            <div className="min-w-[934px]">
+              <div className={`${GRID} border-b border-line bg-sunken px-5 py-2.5 text-[12.5px] font-semibold text-muted`}>
                 <span>Shipment</span>
                 <span>Consignee</span>
                 <span>Route</span>
@@ -190,9 +179,10 @@ function Row({ item }: { item: ShipmentListItem }) {
   const score = item.readiness_score === null ? null : Number(item.readiness_score);
   const muted = "text-[13px] text-muted";
   return (
-    <div className={`${GRID} items-center border-t border-line px-5 py-3.5`}>
+    <div className={`${GRID} relative items-center border-b border-line px-5 py-3.5 transition-colors last:border-b-0 hover:bg-sunken`}>
       <span className="flex min-w-0 flex-col gap-0.5">
-        <Link href={`/shipments/${item.id}`} className="font-mono text-[13.5px] font-medium text-primary hover:underline">
+        {/* The link covers its row, so a click anywhere on the row opens the report. */}
+        <Link href={`/shipments/${item.id}`} className="font-mono text-[13.5px] font-medium text-primary after:absolute after:inset-0 hover:underline">
           {item.reference}
         </Link>
         <span className="truncate font-medium">{item.exporter ?? <span className={muted}>Exporter not read yet</span>}</span>
@@ -220,7 +210,7 @@ function Row({ item }: { item: ShipmentListItem }) {
       </span>
       <span>
         {verdict ? (
-          <span className={`inline-flex items-center gap-1.5 rounded-full py-1 pl-2 pr-[11px] text-[13px] font-semibold ${TONES[verdict.tone].soft} ${TONES[verdict.tone].fg}`}>
+          <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full py-1 pl-2 pr-[11px] text-[13px] font-semibold ${TONES[verdict.tone].soft} ${TONES[verdict.tone].fg}`}>
             <ToneIcon tone={verdict.tone} />
             {verdict.label}
           </span>
@@ -247,9 +237,9 @@ function Row({ item }: { item: ShipmentListItem }) {
 function QueueSkeleton() {
   return (
     <div aria-busy="true" aria-label="Loading shipments" className="flex flex-col gap-7">
-      <div className="h-[72px] w-80 animate-pulse rounded-[14px] bg-surface" />
-      <div className="h-[120px] animate-pulse rounded-[14px] bg-surface" />
-      <div className="h-[320px] animate-pulse rounded-[14px] bg-surface" />
+      <div className="h-[72px] w-80 skeleton" />
+      <div className="h-[84px] skeleton" />
+      <div className="h-[320px] skeleton" />
     </div>
   );
 }

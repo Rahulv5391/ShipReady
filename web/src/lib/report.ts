@@ -32,6 +32,11 @@ export function checksFor(checks: CheckOut[], outcome: CheckOut["outcome"]): Che
     );
 }
 
+/** Every check in the order the report reads: failed, to confirm, passed, the most serious first. */
+export function checkStrip(checks: CheckOut[]): CheckOut[] {
+  return TABS.flatMap((tab) => checksFor(checks, tab.outcome));
+}
+
 /** One plain sentence on what the result means for filing. */
 export function verdictSentence(readiness: Readiness | null, checks: CheckOut[]): string {
   const failed = checks.filter((c) => c.outcome === "fail");

@@ -3,7 +3,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Fragment, Suspense } from "react";
 
-import { TONES, ToneIcon } from "@/components/tone";
+import { Avatar } from "@/components/avatar";
+import { Breadcrumb } from "@/components/breadcrumb";
+import { SeverityChip, TONES, ToneIcon } from "@/components/tone";
 import { ApiError, api } from "@/lib/api";
 import { DOCUMENT_NAMES, kindOf } from "@/lib/documents";
 import { compareEvidence } from "@/lib/evidence";
@@ -11,14 +13,13 @@ import { ruleHref } from "@/lib/rules";
 import { MODES, READINESS, timeAgo } from "@/lib/format";
 import {
   RECIPIENTS,
-  SEVERITY_LABELS,
   TABS,
   approvalLine,
+  checkStrip,
   checksFor,
   collapseRepeats,
   fieldLabel,
   eventLine,
-  initials,
   parseTab,
   readableMessage,
   verdictSentence,
@@ -38,7 +39,8 @@ import { DocumentActions, MessageCard, ReviewActions, type ReviewState } from ".
 
 export const metadata: Metadata = { title: "Readiness report" };
 
-const CIRCLE = 2 * Math.PI * 48; // the score ring's circumference
+// One cell of the verdict's strip per check. Passed cells are faint so the failures stand out.
+const STRIP: Record<Tab, string> = { failed: "bg-fix", confirm: "bg-review", passed: "bg-ready/35" };
 
 type Data = {
   shipment: ShipmentDetail;
@@ -103,13 +105,6 @@ function Values({ check, indices }: { check: CheckOut; indices: number[] }) {
   );
 }
 
-const SEVERITY_TONES: Record<CheckOut["severity"], string> = {
-  blocker: "bg-fix-soft text-fix",
-  major: "bg-review-soft text-review",
-  minor: "bg-sunken text-muted",
-  info: "bg-sunken text-muted",
-};
-
 function Finding({ check, shipmentId }: { check: CheckOut; shipmentId: string }) {
   const serious = check.severity === "blocker" ? "text-fix" : check.severity === "major" ? "text-review" : "text-muted";
   const { differs, agrees } = compareEvidence(check.evidence);
@@ -123,9 +118,7 @@ function Finding({ check, shipmentId }: { check: CheckOut; shipmentId: string })
         <div className="flex flex-col gap-1">
           <div className="flex items-start justify-between gap-3">
             <h3 className="font-semibold leading-snug">{check.title}</h3>
-            <span className={`flex-none rounded-md px-2 py-0.5 text-[12px] font-semibold ${SEVERITY_TONES[check.severity]}`}>
-              {SEVERITY_LABELS[check.severity]}
-            </span>
+            <SeverityChip severity={check.severity} />
           </div>
           {check.message && <p className="text-[14px] text-muted">{readableMessage(check.message)}</p>}
         </div>
@@ -134,7 +127,7 @@ function Finding({ check, shipmentId }: { check: CheckOut; shipmentId: string })
             <Values check={check} indices={differs} />
             {agrees.length > 0 && (
               <details className="group">
-                <summary className="cursor-pointer list-none text-[12.5px] font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+                <summary className="disclosure text-[12.5px] font-medium text-muted hover:text-ink">
                   <span className="group-open:hidden">Show {agrees.length} matching {agrees.length === 1 ? "value" : "values"}</span>
                   <span className="hidden group-open:inline">Hide matching values</span>
                 </summary>
@@ -204,6 +197,7 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
   const score = shipment.readiness_score === null ? null : Number(shipment.readiness_score);
   const counts = Object.fromEntries(TABS.map((t) => [t.id, checks.filter((c) => c.outcome === t.outcome).length])) as Record<Tab, number>;
   const shown = checksFor(checks, TABS.find((t) => t.id === current)!.outcome);
+  const strip = checkStrip(checks);
   const checkedAt = [...events].reverse().find((e) => e.type === "checks_done")?.at;
   const title =
     shipment.exporter && shipment.consignee ? `${shipment.exporter} to ${shipment.consignee}` : shipment.reference;
@@ -235,16 +229,10 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
 
   return (
     <>
-      <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-[13px] text-muted">
-        <Link href="/shipments" className="hover:text-ink">Shipments</Link>
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-          <path d="M5.5 3.5L9 7l-3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        <span className="font-mono text-ink">{shipment.reference}</span>
-      </nav>
+      <Breadcrumb trail={[{ label: "Shipments", href: "/shipments" }, { label: shipment.reference, mono: true }]} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-1.5">
-          <h1 className="text-balance font-display text-[30px] font-bold leading-[1.15] tracking-[-0.025em]">{title}</h1>
+          <h1 className="page-title">{title}</h1>
           <p className="text-base text-muted">
             Shipment <span className="font-mono text-ink">{shipment.reference}</span>
             {route ? `, ${route}` : ""}
@@ -263,68 +251,68 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
         />
       </div>
 
-      <section aria-label="Verdict" className="flex flex-wrap items-center gap-x-8 gap-y-5 rounded-[14px] border border-line bg-surface p-6">
-        {verdict ? (
-          <div
-            role="img"
-            aria-label={`Suggested verdict: ${verdict.label}`}
-            className={`-rotate-3 rounded-[10px] border-[3px] p-1 ${TONES[verdict.tone].fg} ${verdict.tone === "fix" ? "border-fix" : verdict.tone === "review" ? "border-review" : "border-ready"}`}
-          >
-            <div className="flex flex-col items-center rounded-[7px] border-[1.5px] border-current px-4 pb-1.5 pt-2">
-              <span className="font-display text-[26px] font-extrabold uppercase leading-none tracking-[0.05em]">{verdict.label}</span>
-              {checkedAt && (
-                <span className="font-mono text-[10px] tracking-[0.08em]">
-                  CHECKED {new Date(checkedAt).toLocaleDateString("en-GB").replaceAll("/", ".")}
-                </span>
-              )}
+      <section aria-label="Verdict" className="card flex flex-wrap overflow-hidden">
+        <div className={`flex flex-[1_1_230px] items-center justify-center px-9 py-9 sm:max-w-[290px] ${verdict ? TONES[verdict.tone].soft : "bg-sunken"}`}>
+          {verdict ? (
+            <div
+              role="img"
+              aria-label={`Suggested verdict: ${verdict.label}`}
+              className={`-rotate-3 rounded-[10px] border-[3px] border-current p-1 ${TONES[verdict.tone].fg}`}
+            >
+              <div className="flex flex-col items-center rounded-[7px] border-[1.5px] border-current px-4 pb-1.5 pt-2">
+                <span className="whitespace-nowrap font-display text-[28px] font-extrabold uppercase leading-none tracking-[0.05em]">{verdict.label}</span>
+                {checkedAt && (
+                  <span className="font-mono text-[10px] tracking-[0.08em]">
+                    CHECKED {new Date(checkedAt).toLocaleDateString("en-GB").replaceAll("/", ".")}
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="rounded-[10px] border-2 border-dashed border-line-strong px-5 py-4 font-semibold text-muted">Not checked yet</div>
-        )}
-        {score !== null && (
-          <div className="flex items-center gap-4">
-            <svg width="112" height="112" viewBox="0 0 112 112" role="img" aria-label={`Score ${score.toFixed(1)} out of 100`}>
-              <circle cx="56" cy="56" r="48" fill="none" stroke="var(--track)" strokeWidth="10" />
-              <circle
-                cx="56"
-                cy="56"
-                r="48"
-                fill="none"
-                stroke="var(--ink)"
-                strokeWidth="10"
-                strokeLinecap="round"
-                strokeDasharray={`${(CIRCLE * score) / 100} ${CIRCLE}`}
-                transform="rotate(-90 56 56)"
-              />
-              <text x="56" y="63" textAnchor="middle" fontSize="26" fontWeight="700" fill="var(--ink)" className="font-display">
-                {score.toFixed(1)}
-              </text>
-            </svg>
-            <span className="flex flex-col">
-              <span className="font-semibold">Readiness score</span>
-              <span className="max-w-[24ch] text-[13px] text-muted">Share of the rulebook passed, blockers counting most</span>
-            </span>
-          </div>
-        )}
-        <div className="flex min-w-[260px] flex-1 flex-col gap-3">
-          <p className="text-[15px]">{verdictSentence(shipment.readiness, checks)}</p>
-          <div className="flex flex-wrap gap-5">
-            {TABS.map((t) => (
-              <span key={t.id} className="flex items-baseline gap-1.5">
-                <span className="font-display text-2xl font-bold tabular-nums">{counts[t.id]}</span>
-                <span className="text-muted">{t.label.toLowerCase()}</span>
-              </span>
-            ))}
-          </div>
+          ) : (
+            <div className="rounded-[10px] border-2 border-dashed border-line-strong px-5 py-4 font-semibold text-muted">Not checked yet</div>
+          )}
+        </div>
+        <div className="flex min-w-0 flex-[999_1_360px] flex-col gap-5 p-6">
+          <p className="max-w-[62ch] text-pretty text-[17px] font-medium leading-snug">{verdictSentence(shipment.readiness, checks)}</p>
+          {score !== null && (
+            <p className="flex flex-wrap items-baseline gap-x-2.5">
+              <span className="font-display text-[40px] font-bold leading-none tracking-[-0.03em] tabular-nums">{score.toFixed(1)}</span>
+              <span className="text-muted">out of 100. The share of the rulebook passed, blockers counting most.</span>
+            </p>
+          )}
+          {strip.length > 0 && (
+            <div className="flex flex-col gap-2.5">
+              <ol aria-label="Every check: failed, to confirm, then passed" className="flex gap-[3px]">
+                {strip.map((check) => (
+                  <li key={check.rule_id} className="min-w-0 flex-1">
+                    <Link
+                      href={check.outcome !== "pass" && check.evidence.length > 0 ? `/shipments/${id}/checks/${encodeURIComponent(check.rule_id)}` : ruleHref(check.rule_id)}
+                      title={`${check.rule_id}: ${check.title}`}
+                      aria-label={`${check.rule_id}, ${check.title}`}
+                      className={`block h-7 rounded-[3px] transition-transform hover:scale-y-125 ${STRIP[TABS.find((t) => t.outcome === check.outcome)!.id]}`}
+                    />
+                  </li>
+                ))}
+              </ol>
+              <div className="flex flex-wrap gap-x-5 gap-y-1 text-[13px]">
+                {TABS.map((t) => (
+                  <span key={t.id} className="flex items-center gap-1.5">
+                    <span className={`size-2.5 rounded-[2px] ${STRIP[t.id]}`} />
+                    <b className="tabular-nums">{counts[t.id]}</b>
+                    <span className="text-muted">{t.label.toLowerCase()}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
       <div className="flex flex-wrap items-start gap-6">
-        <section aria-label="Findings" className="min-w-0 flex-[1_1_540px] overflow-hidden rounded-[14px] border border-line bg-surface">
+        <section aria-label="Findings" className="min-w-0 flex-[1_1_540px] overflow-hidden card">
           <div className="flex flex-wrap items-center gap-3 border-b border-line px-5 py-4">
             <h2 className="font-display text-lg font-semibold">Findings</h2>
-            <div role="tablist" aria-label="Findings by outcome" className="ml-auto flex rounded-[10px] bg-sunken p-[3px]">
+            <div role="tablist" aria-label="Findings by outcome" className="seg ml-auto bg-sunken">
               {TABS.map((t) => (
                 <Link
                   key={t.id}
@@ -332,9 +320,9 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
                   role="tab"
                   aria-selected={current === t.id}
                   scroll={false}
-                  className={`rounded-lg px-3 py-1.5 text-[13px] font-semibold ${current === t.id ? "bg-surface text-ink shadow-[0_1px_2px_rgba(26,31,43,.08)]" : "text-muted"}`}
+                  className="seg-item"
                 >
-                  {t.label} {counts[t.id]}
+                  {t.label} <span className="tabular-nums opacity-70">{counts[t.id]}</span>
                 </Link>
               ))}
             </div>
@@ -362,7 +350,7 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
         </section>
 
         <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-5">
-          <section aria-label="Messages to send" className="flex flex-col gap-3 rounded-[14px] border border-line bg-surface p-5">
+          <section aria-label="Messages to send" className="flex flex-col gap-3 card p-5">
             <div className="flex flex-col gap-1">
               <h2 className="font-display text-base font-semibold">Messages to send</h2>
               <p className="text-[13px] text-muted">
@@ -380,13 +368,13 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
                   return (
                     <li key={message.id}>
                       <details className="group">
-                        <summary className="flex cursor-pointer list-none items-center gap-2.5 rounded-lg py-1 [&::-webkit-details-marker]:hidden">
-                          <span className="grid size-8 flex-none place-items-center rounded-full bg-primary-soft text-[12px] font-bold text-primary">{initials(to)}</span>
+                        <summary className="disclosure -mx-2 flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-sunken">
+                          <Avatar name={to} />
                           <span className="flex min-w-0 flex-1 flex-col">
                             <span className="font-semibold">{to}</span>
                             <span className="truncate text-[13px] text-muted group-open:whitespace-normal" title={message.subject}>{message.subject}</span>
                           </span>
-                          <span className={`rounded-md px-2 py-0.5 text-[12px] font-semibold capitalize ${message.status === "approved" ? "bg-ready-soft text-ready" : message.status === "discarded" ? "bg-sunken text-muted" : "bg-review-soft text-review"}`}>
+                          <span className={`chip capitalize ${message.status === "approved" ? "bg-ready-soft text-ready" : message.status === "discarded" ? "bg-sunken text-muted" : "bg-review-soft text-review"}`}>
                             {message.status}
                           </span>
                         </summary>
@@ -401,7 +389,7 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
             )}
           </section>
 
-          <section aria-label="Documents in this shipment" className="flex flex-col gap-3 rounded-[14px] border border-line bg-surface p-5">
+          <section aria-label="Documents in this shipment" className="flex flex-col gap-3 card p-5">
             <div className="flex flex-col gap-1">
               <h2 className="font-display text-base font-semibold">Documents</h2>
               <p className="text-[13px] text-muted">
@@ -411,7 +399,7 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
             <ul className="flex flex-col gap-2.5">
               {shipment.documents.map((document) => (
                 <li key={document.id} className="flex items-start gap-2.5">
-                  <span className="mt-0.5 w-12 flex-none rounded-md bg-sunken py-0.5 text-center text-[11.5px] font-semibold text-muted">{kindOf(document.filename)}</span>
+                  <span className="chip mt-0.5 w-14 flex-none bg-sunken text-center text-muted">{kindOf(document.filename)}</span>
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="font-semibold">
                       {document.parts.length > 0
@@ -432,12 +420,12 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
             </ul>
           </section>
 
-          <section aria-label="Activity" className="flex flex-col gap-3 rounded-[14px] border border-line bg-surface p-5">
+          <section aria-label="Activity" className="flex flex-col gap-3 card p-5">
             <h2 className="font-display text-base font-semibold">Activity</h2>
             <ActivityList lines={activity.slice(0, ACTIVITY_SHOWN)} />
             {activity.length > ACTIVITY_SHOWN && (
               <details className="group">
-                <summary className="cursor-pointer list-none text-[13px] font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+                <summary className="disclosure text-[13px] font-medium text-muted hover:text-ink">
                   <span className="group-open:hidden">Show {activity.length - ACTIVITY_SHOWN} earlier</span>
                   <span className="hidden group-open:inline">Hide earlier</span>
                 </summary>
@@ -456,9 +444,9 @@ async function Report({ ids, tab }: { ids: Promise<{ id: string }>; tab: Promise
 function ReportSkeleton() {
   return (
     <div aria-busy="true" aria-label="Loading the report" className="flex flex-col gap-6">
-      <div className="h-[72px] w-2/3 animate-pulse rounded-[14px] bg-surface" />
-      <div className="h-[160px] animate-pulse rounded-[14px] bg-surface" />
-      <div className="h-[420px] animate-pulse rounded-[14px] bg-surface" />
+      <div className="h-[72px] w-2/3 skeleton" />
+      <div className="h-[160px] skeleton" />
+      <div className="h-[420px] skeleton" />
     </div>
   );
 }

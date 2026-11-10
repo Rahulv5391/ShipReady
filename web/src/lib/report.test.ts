@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   approvalLine,
+  checkStrip,
   checksFor,
   collapseRepeats,
   documentOf,
@@ -40,6 +41,16 @@ describe("checksFor", () => {
   it("keeps one outcome, blockers first, then by rule", () => {
     expect(checksFor(checks, "fail").map((c) => c.rule_id)).toEqual(["DOC-01", "ID-01", "WT-01"]);
     expect(checksFor(checks, "pass").map((c) => c.rule_id)).toEqual(["HS-01"]);
+  });
+});
+
+describe("checkStrip", () => {
+  it("lists every check once: failed, to confirm, then passed, the most serious first", () => {
+    expect(checkStrip(checks).map((c) => c.rule_id)).toEqual(["DOC-01", "ID-01", "WT-01", "QTY-03", "HS-01"]);
+  });
+
+  it("is empty before the checks have run", () => {
+    expect(checkStrip([])).toEqual([]);
   });
 });
 
