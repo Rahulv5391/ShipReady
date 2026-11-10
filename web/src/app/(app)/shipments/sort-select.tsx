@@ -9,7 +9,7 @@ export function SortSelect({ value }: { value: Sort }) {
       name="sort"
       defaultValue={value}
       onChange={(event) => event.currentTarget.form?.requestSubmit()}
-      className="min-h-9 rounded-lg border border-line bg-surface px-2.5 text-ink"
+      className="min-h-9 cursor-pointer rounded-lg border border-line bg-surface px-2.5 text-ink transition-colors hover:border-line-strong"
     >
       {Object.entries(SORTS).map(([key, label]) => (
         <option key={key} value={key}>

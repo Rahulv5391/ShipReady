@@ -174,7 +174,7 @@ export function NewShipment() {
   return (
     <div className="flex flex-wrap items-start gap-6">
       <div className="flex min-w-0 flex-[1_1_540px] flex-col gap-6">
-        <section aria-label="Shipment details" className="flex flex-col gap-4 rounded-[14px] border border-line bg-surface p-6">
+        <section aria-label="Shipment details" className="flex flex-col gap-4 card p-6">
           <h2 className={heading}>
             <span className={number}>1</span>
             Shipment details
@@ -194,7 +194,7 @@ export function NewShipment() {
                 placeholder="e.g. SG42-0031"
                 aria-invalid={problem?.reference || undefined}
                 aria-describedby="reference-hint"
-                className={`min-h-12 rounded-[10px] border bg-surface px-3.5 text-[15px] outline-none disabled:opacity-70 ${problem?.reference ? "border-fix" : "border-line-strong"}`}
+                className="field min-h-12 px-3.5 text-[15px] disabled:opacity-70"
               />
               <span id="reference-hint" className={`text-[13px] ${problem?.reference ? "text-fix" : "text-muted"}`}>
                 {problem?.reference ? problem.message : "Must be unique in your organisation."}
@@ -209,7 +209,7 @@ export function NewShipment() {
                     type="button"
                     aria-pressed={mode === option}
                     onClick={() => setMode(option)}
-                    className={`inline-flex min-h-12 cursor-pointer items-center gap-2 rounded-[10px] border px-4 font-semibold capitalize ${mode === option ? "border-primary bg-primary-soft text-primary" : "border-line-strong"}`}
+                    className={`btn min-h-12 border px-5 capitalize ${mode === option ? "border-primary bg-primary-soft text-primary" : "border-line-strong hover:bg-sunken"}`}
                   >
                     {option}
                   </button>
@@ -222,7 +222,7 @@ export function NewShipment() {
           </div>
         </section>
 
-        <section aria-label="Files" className="flex flex-col gap-4 rounded-[14px] border border-line bg-surface p-6">
+        <section aria-label="Files" className="flex flex-col gap-4 card p-6">
           <h2 className={heading}>
             <span className={number}>2</span>
             Documents
@@ -234,7 +234,7 @@ export function NewShipment() {
             }}
             onDragLeave={() => setDragging(false)}
             onDrop={drop}
-            className={`flex flex-wrap items-center gap-4 rounded-[12px] border-2 border-dashed p-5 ${dragging ? "border-primary bg-primary-soft" : "border-line-strong bg-sunken"}`}
+            className={`flex flex-wrap items-center gap-4 rounded-[12px] border-2 border-dashed p-5 transition-colors ${dragging ? "border-primary bg-primary-soft" : "border-line-strong bg-sunken"}`}
           >
             <span className="grid size-12 flex-none place-items-center rounded-full bg-primary-soft text-primary">
               <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
@@ -252,7 +252,7 @@ export function NewShipment() {
             <span className="flex flex-wrap gap-2.5">
               <label
                 htmlFor="files"
-                className={`inline-flex min-h-11 cursor-pointer items-center rounded-[10px] bg-primary px-4 font-semibold text-primary-ink ${room === 0 ? "pointer-events-none opacity-50" : ""}`}
+                className={`btn btn-md btn-primary ${room === 0 ? "pointer-events-none opacity-50" : ""}`}
               >
                 Choose files
               </label>
@@ -276,7 +276,7 @@ export function NewShipment() {
             <ul aria-label="Chosen files" className="flex flex-col divide-y divide-line rounded-[10px] border border-line">
               {chosen.map((item) => (
                 <li key={item.key} className="flex items-center gap-3 px-4 py-2.5">
-                  <span className="w-12 flex-none rounded-md bg-sunken py-0.5 text-center text-[12px] font-semibold text-muted">
+                  <span className="chip w-14 flex-none bg-sunken text-center text-muted">
                     {kindOf(item.name)}
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col">
@@ -284,14 +284,14 @@ export function NewShipment() {
                     <span className="text-[13px] text-muted">{item.size ? sizeText(item.size) : "Google Doc or Sheet, converted on upload"}</span>
                   </span>
                   {item.from === "drive" && (
-                    <span className="rounded-md bg-primary-soft px-2 py-0.5 text-[12px] font-semibold text-primary">Google Drive</span>
+                    <span className="chip bg-primary-soft text-primary">Google Drive</span>
                   )}
                   <button
                     type="button"
                     disabled={busy}
                     aria-label={`Remove ${item.name}`}
                     onClick={() => setChosen((current) => current.filter((c) => c.key !== item.key))}
-                    className="grid size-9 cursor-pointer place-items-center rounded-lg text-muted hover:text-fix"
+                    className="grid size-9 cursor-pointer place-items-center rounded-lg text-muted transition-colors hover:bg-fix-soft hover:text-fix"
                   >
                     <svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true">
                       <path d="M3.5 5h11M7.5 5V3.5h3V5M5 5l.7 9.5h6.6L13 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -325,14 +325,14 @@ export function NewShipment() {
               )}
             </span>
             <div className="ml-auto flex gap-2.5">
-              <Link href="/shipments" className="flex min-h-11 items-center rounded-[10px] px-4 font-semibold text-muted">
+              <Link href="/shipments" className="btn btn-md text-muted hover:text-ink">
                 Cancel
               </Link>
               <button
                 type="button"
                 onClick={upload}
                 disabled={busy || chosen.length === 0 || !reference.trim()}
-                className="min-h-11 cursor-pointer rounded-[10px] bg-primary px-5 font-semibold text-primary-ink disabled:cursor-not-allowed disabled:opacity-50"
+                className="btn btn-md btn-primary"
               >
                 {busy
                   ? "Uploading…"
@@ -346,7 +346,7 @@ export function NewShipment() {
       </div>
 
       <div className="flex flex-[1_1_300px] flex-col gap-5">
-        <section aria-label="Documents to include" className="flex flex-col gap-3 rounded-[14px] border border-line bg-surface p-5">
+        <section aria-label="Documents to include" className="flex flex-col gap-3 card p-5">
           <h2 className="font-display text-base font-semibold">Documents to include</h2>
           <p className="text-[13px] text-muted">A missing required document stops the shipment as a blocker.</p>
           <ul className="flex flex-col gap-2">
@@ -360,7 +360,7 @@ export function NewShipment() {
             ))}
           </ul>
         </section>
-        <section aria-label="What happens next" className="flex flex-col gap-3 rounded-[14px] border border-line bg-surface p-5">
+        <section aria-label="What happens next" className="flex flex-col gap-3 card p-5">
           <h2 className="font-display text-base font-semibold">What happens next</h2>
           <ol className="flex flex-col gap-3">
             {NEXT_STEPS.map(([title, text], index) => (

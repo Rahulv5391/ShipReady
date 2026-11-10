@@ -4,10 +4,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
+import { Avatar } from "@/components/avatar";
+import { Breadcrumb } from "@/components/breadcrumb";
 import { ApiError, api } from "@/lib/api";
 import { TEXT_SOURCES, compareEvidence, neighbours, parseView, printedDiffers, sheetsFor, type Sheet } from "@/lib/evidence";
 import { ruleHref } from "@/lib/rules";
-import { RECIPIENTS, SEVERITY_LABELS, fieldLabel, initials, readableMessage } from "@/lib/report";
+import { RECIPIENTS, SEVERITY_LABELS, fieldLabel, readableMessage } from "@/lib/report";
 import type { CheckOut, FieldOut, MessageOut, PageOut, RunOut, ShipmentDetail } from "@/lib/types";
 
 import { MessageCard } from "../../review";
@@ -164,16 +166,16 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
 
   return (
     <>
-      <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-[13px] text-muted">
-        <Link href="/shipments" className="hover:text-ink">Shipments</Link>
-        <span aria-hidden="true">/</span>
-        <Link href={`/shipments/${id}`} className="font-mono hover:text-ink">{shipment.reference}</Link>
-        <span aria-hidden="true">/</span>
-        <span className="text-ink">{check.title}</span>
-      </nav>
+      <Breadcrumb
+        trail={[
+          { label: "Shipments", href: "/shipments" },
+          { label: shipment.reference, href: `/shipments/${id}`, mono: true },
+          { label: check.title },
+        ]}
+      />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-1.5">
-          <h1 className="text-balance font-display text-[26px] font-bold leading-[1.2] tracking-[-0.02em]">{check.title}</h1>
+          <h1 className="page-title">{check.title}</h1>
           {check.message && <p className="text-[15px]">{readableMessage(check.message)}</p>}
           <p className="text-muted">
             <span className={`font-semibold ${serious}`}>
@@ -193,7 +195,7 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
               ["Next", place.next],
             ].map(([label, target]) =>
               target ? (
-                <Link key={label} href={`/shipments/${id}/checks/${encodeURIComponent(target)}`} className="rounded-[10px] border border-line-strong bg-surface px-3.5 py-2 text-[13.5px] font-semibold hover:bg-sunken">
+                <Link key={label} href={`/shipments/${id}/checks/${encodeURIComponent(target)}`} className="btn btn-sm btn-secondary">
                   {label}
                 </Link>
               ) : (
@@ -211,7 +213,7 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
           {sheets.length > 0 && (
             <div className="flex flex-wrap items-center gap-3">
               {sheets.length > 1 && (
-                <div role="tablist" aria-label="Pages to show" className="flex flex-wrap rounded-[10px] bg-surface/60 p-[3px]">
+                <div role="tablist" aria-label="Pages to show" className="seg flex-wrap bg-surface/60">
                   {[{ n: null, label: "Side by side" }, ...sheets.map((s, i) => ({ n: i + 1, label: s.label }))].map((tab) => (
                     <Link
                       key={tab.label}
@@ -219,7 +221,7 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
                       role="tab"
                       aria-selected={shown === tab.n}
                       scroll={false}
-                      className={`rounded-lg px-3 py-1.5 text-[13px] font-semibold ${shown === tab.n ? "bg-surface text-ink shadow-[0_1px_2px_rgba(26,31,43,.08)]" : "text-muted"}`}
+                      className="seg-item"
                     >
                       {tab.label}
                     </Link>
@@ -233,7 +235,7 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
                 scroll={false}
                 className="ml-auto flex items-center gap-2 text-[13px] font-medium"
               >
-                <span className={`flex h-5 w-9 items-center rounded-full p-0.5 ${outlineAll ? "justify-end bg-primary" : "bg-line-strong"}`}>
+                <span className={`flex h-5 w-9 items-center rounded-full p-0.5 transition-colors ${outlineAll ? "justify-end bg-primary" : "bg-line-strong"}`}>
                   <span className="size-4 rounded-full bg-white" />
                 </span>
                 Outline every value read
@@ -255,12 +257,12 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
           )}
         </section>
 
-        <section aria-label="What the check read" className="flex min-w-0 flex-[1_1_300px] flex-col gap-4 rounded-[14px] border border-line bg-surface p-5">
+        <section aria-label="What the check read" className="flex min-w-0 flex-[1_1_300px] flex-col gap-4 card p-5">
           <h2 className="font-display text-lg font-semibold">{check.outcome === "pass" ? "What the check read" : "What doesn't match"}</h2>
           {differs.length > 0 && <ValueList check={check} indices={differs} tone="fix" />}
           {agrees.length > 0 && (
             <details className="group flex flex-col">
-              <summary className="cursor-pointer list-none text-[13px] font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+              <summary className="disclosure text-[13px] font-medium text-muted hover:text-ink">
                 <span className="group-open:hidden">Show {agrees.length} matching {agrees.length === 1 ? "value" : "values"}</span>
                 <span className="hidden group-open:inline">Matching values</span>
               </summary>
@@ -294,11 +296,11 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
         {messages.map((message) => {
           const to = RECIPIENTS[message.recipient] ?? message.recipient;
           return (
-            <section key={message.id} aria-label={`Message to ${to}`} className="flex min-w-0 flex-[1_1_300px] flex-col gap-3 rounded-[14px] border border-line bg-surface p-5">
+            <section key={message.id} aria-label={`Message to ${to}`} className="flex min-w-0 flex-[1_1_300px] flex-col gap-3 card p-5">
               <div className="flex items-center gap-2.5">
-                <span className="grid size-8 flex-none place-items-center rounded-full bg-primary-soft text-[12px] font-bold text-primary">{initials(to)}</span>
+                <Avatar name={to} />
                 <span className="flex-1 font-semibold">To {to}</span>
-                <span className="rounded-md bg-sunken px-2 py-0.5 text-[12px] font-semibold capitalize">{message.status}</span>
+                <span className="chip bg-sunken capitalize">{message.status}</span>
               </div>
               <MessageCard key={`${message.id}-${message.status}`} shipmentId={id} message={message} to={to} />
             </section>
@@ -312,8 +314,8 @@ async function Evidence({ ids, query }: { ids: Promise<{ id: string; rule: strin
 function EvidenceSkeleton() {
   return (
     <div aria-busy="true" aria-label="Loading the pages" className="flex flex-col gap-6">
-      <div className="h-[64px] w-2/3 animate-pulse rounded-[14px] bg-surface" />
-      <div className="h-[640px] animate-pulse rounded-[14px] bg-surface" />
+      <div className="h-[64px] w-2/3 skeleton" />
+      <div className="h-[640px] skeleton" />
     </div>
   );
 }

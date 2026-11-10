@@ -4,16 +4,13 @@ import { useActionState } from "react";
 
 import { signIn } from "./actions";
 
-const field =
-  "min-h-12 rounded-[10px] border bg-surface px-3.5 text-[15px] text-ink outline-none";
-
 export function SignInForm() {
   const [state, action, pending] = useActionState(signIn, undefined);
-  const border = state ? "border-fix" : "border-line-strong";
+  const invalid = state ? true : undefined;
   return (
     <form action={action} className="flex w-full max-w-[380px] flex-col gap-[22px]">
       <div className="flex flex-col gap-1.5">
-        <h2 className="font-display text-[30px] font-bold tracking-[-0.025em]">Sign in</h2>
+        <h2 className="page-title">Sign in</h2>
         <p className="text-[15px] text-muted">
           Use your work email to see your organisation&apos;s shipments.
         </p>
@@ -39,7 +36,8 @@ export function SignInForm() {
           autoComplete="email"
           required
           defaultValue={state?.email}
-          className={`${field} ${border}`}
+          aria-invalid={invalid}
+          className="field min-h-12 px-3.5 text-[15px]"
         />
       </div>
       <div className="flex flex-col gap-[7px]">
@@ -53,7 +51,8 @@ export function SignInForm() {
           type="password"
           autoComplete="current-password"
           required
-          className={`${field} ${border}`}
+          aria-invalid={invalid}
+          className="field min-h-12 px-3.5 text-[15px]"
         />
       </div>
       <label className="flex min-h-7 cursor-pointer items-center gap-2.5 text-sm">
@@ -64,7 +63,7 @@ export function SignInForm() {
       <button
         type="submit"
         disabled={pending}
-        className="flex min-h-[50px] cursor-pointer items-center justify-center rounded-[10px] bg-primary text-[15px] font-bold text-primary-ink disabled:cursor-wait disabled:opacity-70"
+        className="btn btn-primary min-h-[50px] text-[15px]"
       >
         {pending ? "Signing in…" : "Sign in"}
       </button>

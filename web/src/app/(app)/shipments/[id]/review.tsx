@@ -10,9 +10,8 @@ import type { MessageOut } from "@/lib/types";
 
 import { checkAgain, decide, removeDocument, updateMessage, type Outcome } from "./actions";
 
-const BUTTON = "rounded-[10px] px-3.5 py-2 text-[13.5px] font-semibold disabled:opacity-50";
-const PRIMARY = `${BUTTON} bg-primary text-primary-ink hover:opacity-90`;
-const SECONDARY = `${BUTTON} border border-line-strong bg-surface hover:bg-sunken`;
+const PRIMARY = "btn btn-sm btn-primary";
+const SECONDARY = "btn btn-sm btn-secondary";
 
 function useAction() {
   const [pending, start] = useTransition();
@@ -71,7 +70,7 @@ export function ReviewActions({
       </div>
       {open && (
         <form
-          className="flex w-full flex-col gap-2.5 rounded-[14px] border border-line bg-surface p-4 shadow-[var(--nav-shadow)] sm:absolute sm:right-0 sm:top-full sm:z-10 sm:mt-2 sm:w-[440px]"
+          className="flex w-full flex-col gap-2.5 rounded-[14px] border border-line bg-surface p-4 shadow-[var(--shadow-pop)] sm:absolute sm:right-0 sm:top-full sm:z-10 sm:mt-2 sm:w-[440px]"
           onSubmit={(event) => {
             event.preventDefault();
             run(() => decide(shipmentId, open, reason), () => setOpen(null));
@@ -94,7 +93,7 @@ export function ReviewActions({
             maxLength={2000}
             value={reason}
             onChange={(event) => setReason(event.target.value)}
-            className="rounded-[10px] border border-line-strong bg-surface px-3 py-2 text-[14px]"
+            className="field px-3 py-2 text-[14px]"
           />
           {error && <p role="alert" className="text-[13px] text-fix">{error}</p>}
           <div className="flex justify-end gap-2">
@@ -141,7 +140,7 @@ export function MessageCard({ shipmentId, message, to }: { shipmentId: string; m
         value={subject}
         readOnly={!draft}
         onChange={(event) => setSubject(event.target.value)}
-        className="rounded-[10px] border border-line-strong bg-surface px-3 py-2 text-[14px] read-only:border-line read-only:bg-sunken"
+        className="field px-3 py-2 text-[14px]"
       />
       <label htmlFor={`body-${message.id}`} className="text-[12.5px] font-semibold text-muted">Message to {to}</label>
       <textarea
@@ -150,7 +149,7 @@ export function MessageCard({ shipmentId, message, to }: { shipmentId: string; m
         value={body}
         readOnly={!draft}
         onChange={(event) => setBody(event.target.value)}
-        className="rounded-[10px] border border-line-strong bg-surface px-3 py-2 text-[14px] leading-relaxed read-only:border-line read-only:bg-sunken"
+        className="field px-3 py-2 text-[14px] leading-relaxed"
       />
       {error && <p role="alert" className="text-[13px] text-fix">{error}</p>}
       {discarding ? (
@@ -159,7 +158,7 @@ export function MessageCard({ shipmentId, message, to }: { shipmentId: string; m
           <button type="button" className={SECONDARY} onClick={() => setDiscarding(false)}>Keep it</button>
           <button
             type="button"
-            className={`${BUTTON} bg-fix text-surface hover:opacity-90`}
+            className="btn btn-sm btn-danger"
             disabled={pending}
             onClick={() => run(() => updateMessage(shipmentId, message.id, { decision: "discard" }), () => setDiscarding(false))}
           >
@@ -169,7 +168,7 @@ export function MessageCard({ shipmentId, message, to }: { shipmentId: string; m
       ) : (
         <div className="flex flex-wrap justify-end gap-2">
           {draft && (
-            <button type="button" className={`${BUTTON} mr-auto text-fix hover:bg-fix-soft`} onClick={() => setDiscarding(true)}>
+            <button type="button" className="btn btn-sm mr-auto text-fix hover:bg-fix-soft" onClick={() => setDiscarding(true)}>
               Discard
             </button>
           )}

@@ -105,7 +105,7 @@ export function Progress({
   const verdict = state.readiness ? READINESS[state.readiness] : null;
 
   return (
-    <section aria-label="Upload progress" className="flex flex-col gap-5 rounded-[14px] border border-line bg-surface p-6">
+    <section aria-label="Upload progress" className="flex flex-col gap-5 card p-6">
       <div role="status" className="flex items-start gap-3">
         <span className="grid size-9 flex-none place-items-center rounded-full bg-ready-soft text-ready">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -196,7 +196,7 @@ export function Progress({
               </span>
               <span className="flex flex-wrap gap-1.5">
                 {read?.documents.map((type, index) => (
-                  <span key={`${type}-${index}`} className="rounded-md bg-primary-soft px-2 py-0.5 text-[12.5px] font-semibold text-primary">
+                  <span key={`${type}-${index}`} className="chip bg-primary-soft text-primary">
                     {DOCUMENT_NAMES[type] ?? type}
                   </span>
                 ))}
@@ -210,11 +210,11 @@ export function Progress({
         <button
           type="button"
           onClick={onAddMore}
-          className="min-h-11 cursor-pointer rounded-[10px] border border-line-strong px-4 font-semibold"
+          className="btn btn-md btn-secondary"
         >
           Add more files
         </button>
-        <Link href={`/shipments/${shipmentId}`} className="flex min-h-11 items-center rounded-[10px] bg-primary px-4 font-semibold text-primary-ink">
+        <Link href={`/shipments/${shipmentId}`} className="btn btn-md btn-primary">
           Open the report
         </Link>
       </div>

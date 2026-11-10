@@ -45,7 +45,7 @@ export function NavLinks() {
 /** The same links before the current page is known. */
 export function NavList({ current }: { current?: string }) {
   return (
-    <nav aria-label="Main" className="flex flex-col gap-1">
+    <nav aria-label="Main" className="order-last flex basis-full gap-1 overflow-x-auto side:order-none side:basis-auto side:flex-col side:overflow-visible">
       {LINKS.map((link) => {
         const active = current === link.href;
         return (
@@ -53,13 +53,13 @@ export function NavList({ current }: { current?: string }) {
             key={link.href}
             href={link.href}
             aria-current={active ? "page" : undefined}
-            className={`flex min-h-11 items-center gap-3 rounded-[10px] px-3 ${
+            className={`flex min-h-11 items-center gap-3 whitespace-nowrap rounded-[10px] px-3 transition-colors ${
               active
-                ? "bg-surface font-semibold text-primary shadow-[var(--nav-shadow)]"
-                : "text-muted hover:text-ink"
+                ? "bg-surface font-semibold text-primary shadow-[var(--shadow-raised)]"
+                : "text-muted hover:bg-surface/60 hover:text-ink"
             }`}
           >
-            {link.icon}
+            <span className="hidden side:block">{link.icon}</span>
             {link.label}
           </Link>
         );

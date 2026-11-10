@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 
 import type { Tone } from "@/lib/format";
+import { SEVERITY_LABELS } from "@/lib/report";
+import type { Severity } from "@/lib/types";
 
-/** Colours and icons for the verdicts and states, shared by the queue and the report. */
+/** Colours and icons for the verdicts, states and severities, shared by every page. */
 
 export const TONES: Record<Tone, { fg: string; soft: string; solid: string }> = {
   fix: { fg: "text-fix", soft: "bg-fix-soft", solid: "bg-fix" },
@@ -31,4 +33,15 @@ export function ToneIcon({ tone }: { tone: Tone }) {
       {PATHS[tone]}
     </svg>
   );
+}
+
+const SEVERITY_TONES: Record<Severity, string> = {
+  blocker: "bg-fix-soft text-fix",
+  major: "bg-review-soft text-review",
+  minor: "bg-sunken text-muted",
+  info: "bg-sunken text-muted",
+};
+
+export function SeverityChip({ severity }: { severity: Severity }) {
+  return <span className={`chip flex-none ${SEVERITY_TONES[severity]}`}>{SEVERITY_LABELS[severity]}</span>;
 }

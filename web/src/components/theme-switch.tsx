@@ -35,16 +35,14 @@ export function ThemeSwitch() {
   // On the server nothing is known yet, so neither button shows as chosen.
   const theme = useSyncExternalStore<Theme | null>(subscribe, currentTheme, () => null);
   return (
-    <div role="group" aria-label="Theme" className="flex rounded-[10px] border border-line bg-sunken p-[3px]">
+    <div role="group" aria-label="Theme" className="seg border border-line bg-sunken">
       {(["light", "dark"] as const).map((option) => (
         <button
           key={option}
           type="button"
           aria-pressed={theme === option}
           onClick={() => choose(option)}
-          className={`flex-1 cursor-pointer rounded-lg py-1.5 text-[13px] font-semibold capitalize ${
-            theme === option ? "bg-surface text-ink" : "text-muted"
-          }`}
+          className="seg-item flex-1 capitalize"
         >
           {option}
         </button>
